@@ -11,7 +11,10 @@ class BackgroundNotificationWorker(
     override suspend fun doWork(): Result {
         val result = BackgroundNotificationSyncer(applicationContext).sync()
         if (AndroidBackgroundNotificationStore(applicationContext).isBackgroundSyncEnabled()) {
-            if (!RealtimeNotificationService.tryStart(applicationContext)) {
+            if (!RealtimeNotificationService.hibernatedDueToIdle &&
+                !RealtimeNotificationService.isRunning() &&
+                !RealtimeNotificationService.tryStart(applicationContext)
+            ) {
                 BackgroundNotificationScheduler.syncSoon(applicationContext)
             }
         }

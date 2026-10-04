@@ -31,9 +31,7 @@ object BackgroundNotificationScheduler {
         if (enabled) {
             schedule(context)
             syncNow(context)
-            if (RealtimeNotificationService.start(context)) {
-                scheduleRecoveryAlarm(context, WATCHDOG_DELAY_SECONDS)
-            } else {
+            if (!RealtimeNotificationService.start(context)) {
                 syncSoon(context)
             }
         } else {
@@ -46,23 +44,23 @@ object BackgroundNotificationScheduler {
         if (AndroidBackgroundNotificationStore(context.applicationContext).isBackgroundSyncEnabled()) {
             schedule(context)
             syncNow(context)
-            if (RealtimeNotificationService.tryStart(context)) {
-                scheduleRecoveryAlarm(context, WATCHDOG_DELAY_SECONDS)
-            } else {
+            if (!RealtimeNotificationService.tryStart(context)) {
                 syncSoon(context)
             }
         }
     }
 
     fun watchdog(context: Context) {
-        if (AndroidBackgroundNotificationStore(context.applicationContext).isBackgroundSyncEnabled()) {
-            if (RealtimeNotificationService.tryStart(context)) {
-                scheduleRecoveryAlarm(context, WATCHDOG_DELAY_SECONDS)
-            } else {
-                syncSoon(context)
-            }
-        } else {
+        if (!AndroidBackgroundNotificationStore(context.applicationContext).isBackgroundSyncEnabled()) {
             cancelRecoveryAlarm(context)
+            return
+        }
+        if (RealtimeNotificationService.isRunning() || RealtimeNotificationService.hibernatedDueToIdle) {
+            cancelRecoveryAlarm(context)
+            return
+        }
+        if (!RealtimeNotificationService.tryStart(context)) {
+            scheduleRecoveryAlarm(context, WATCHDOG_DELAY_SECONDS)
         }
     }
 
@@ -71,7 +69,7 @@ object BackgroundNotificationScheduler {
             15,
             TimeUnit.MINUTES,
         )
-            .setConstraints(networkConstraints())
+            .setConstraints(batteryFriendlyNetworkConstraints())
             .build()
         WorkManager.getInstance(context.applicationContext).enqueueUniquePeriodicWork(
             PERIODIC_WORK_NAME,
@@ -116,6 +114,13 @@ object BackgroundNotificationScheduler {
     private fun networkConstraints(): Constraints {
         return Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+    }
+
+    private fun batteryFriendlyNetworkConstraints(): Constraints {
+        return Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .setRequiresBatteryNotLow(true)
             .build()
     }
 

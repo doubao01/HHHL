@@ -16,6 +16,7 @@ import cc.hhhl.client.automation.toMainStreamingOptions
 import cc.hhhl.client.api.ChatStreamingEvent
 import cc.hhhl.client.api.MainStreamingEvent
 import cc.hhhl.client.api.MainStreamingOptions
+import cc.hhhl.client.auth.AccountSession
 import cc.hhhl.client.repository.ChatStreamingRepository
 import cc.hhhl.client.model.ChatMessage
 import cc.hhhl.client.model.NotificationItem
@@ -24,18 +25,21 @@ import cc.hhhl.client.repository.MainStreamingRepository
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
 
 class RealtimeNotificationService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var lastTimelineSyncAt: Long = 0L
     private var lastRealtimeChatSyncAt: Long = 0L
+    @Volatile
+    private var lastRealtimeActivityAt: Long = System.currentTimeMillis()
     private var realtimeWakeLock: PowerManager.WakeLock? = null
     @Volatile
     private var shouldScheduleRecovery: Boolean = true
@@ -49,6 +53,8 @@ class RealtimeNotificationService : Service() {
             return
         }
         renewRealtimeWakeLock()
+        instanceRunning = true
+        hibernatedDueToIdle = false
         scope.launch {
             runRealtimeLoop()
         }
@@ -57,6 +63,9 @@ class RealtimeNotificationService : Service() {
         }
         scope.launch {
             runRealtimeChatLoop()
+        }
+        scope.launch {
+            runIdleGovernorLoop()
         }
     }
 
@@ -72,6 +81,7 @@ class RealtimeNotificationService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        instanceRunning = false
         scope.cancel()
         releaseRealtimeWakeLock()
         if (shouldScheduleRecovery && AndroidBackgroundNotificationStore(applicationContext).isBackgroundSyncEnabled()) {
@@ -105,6 +115,7 @@ class RealtimeNotificationService : Service() {
             var unauthorized = false
             runCatching {
                 MainStreamingRepository(tokenProvider = { token }).streamMain(mainStreamingOptions()).collect { event ->
+                    if (event.isRealtimeActivitySignal()) noteRealtimeActivity()
                     when (event) {
                         MainStreamingEvent.UnreadNotification -> syncNotificationEvent()
                         is MainStreamingEvent.NotificationReceived -> syncNotificationEvent(event.notification)
@@ -155,8 +166,12 @@ class RealtimeNotificationService : Service() {
         val syncer = BackgroundNotificationSyncer(applicationContext)
         while (scope.isActive && settings.isBackgroundSyncEnabled()) {
             renewRealtimeWakeLock()
-            syncer.sync(trigger = BackgroundNotificationSyncTrigger.PollingSafety)
-            delay(POLLING_SAFETY_INTERVAL_MS)
+            val result = syncer.sync(trigger = BackgroundNotificationSyncTrigger.PollingSafety)
+            if (result == BackgroundNotificationSyncResult.Retry) {
+                delay(POLLING_SAFETY_INTERVAL_MS)
+                continue
+            }
+            delay(idleSyncIntervalMs(POLLING_SAFETY_INTERVAL_MS, POLLING_SAFETY_MAX_INTERVAL_MS))
         }
     }
 
@@ -175,52 +190,60 @@ class RealtimeNotificationService : Service() {
 
             val targets = BackgroundNotificationSyncer(applicationContext).loadRealtimeChatStreamTargets(session)
             if (targets.isEmpty) {
-                delay(CHAT_TARGET_REFRESH_INTERVAL_MS)
+                delay(idleSyncIntervalMs(CHAT_TARGET_REFRESH_INTERVAL_MS, CHAT_TARGET_REFRESH_MAX_INTERVAL_MS))
                 continue
             }
 
             var unauthorized = false
             runCatching {
-                withTimeoutOrNull(CHAT_TARGET_REFRESH_INTERVAL_MS) {
-                    ChatStreamingRepository(tokenProvider = { token }).streamMessages(
-                        roomIds = targets.roomIds,
-                        userIds = targets.userIds,
-                    ).collect { event ->
-                        when (event) {
-                            is ChatStreamingEvent.MessageReceived -> {
-                                val sourceRoomId = event.source.roomId?.takeIf { roomId -> roomId in targets.roomIdSet }
-                                val sourceUserId = event.source.userId?.takeIf { userId -> userId in targets.userIdSet }
-                                val fallbackUserId = if (sourceRoomId == null) {
-                                    targets.userIds.firstOrNull { userId ->
-                                        event.message.belongsToDirectChat(userId) && event.message.roomId !in targets.roomIdSet
+                coroutineScope {
+                    val streamJob = launch {
+                        ChatStreamingRepository(tokenProvider = { token }).streamMessages(
+                            roomIds = targets.roomIds,
+                            userIds = targets.userIds,
+                        ).collect { event ->
+                            if (event.isRealtimeActivitySignal()) noteRealtimeActivity()
+                            when (event) {
+                                is ChatStreamingEvent.MessageReceived -> {
+                                    val sourceRoomId = event.source.roomId?.takeIf { roomId -> roomId in targets.roomIdSet }
+                                    val sourceUserId = event.source.userId?.takeIf { userId -> userId in targets.userIdSet }
+                                    val fallbackUserId = if (sourceRoomId == null) {
+                                        targets.userIds.firstOrNull { userId ->
+                                            event.message.belongsToDirectChat(userId) && event.message.roomId !in targets.roomIdSet
+                                        }
+                                    } else {
+                                        null
                                     }
-                                } else {
-                                    null
+                                    val messageDirectUserId = event.message
+                                        .directPeerId(session.user?.id)
+                                        .takeIf { event.message.roomId.isBlank() }
+                                    val directUserId = sourceUserId ?: fallbackUserId ?: messageDirectUserId
+                                    val messageRoomId = event.message.roomId.takeIf { it.isNotBlank() }
+                                    val roomId = sourceRoomId ?: messageRoomId
+                                    val handledRealtime = BackgroundNotificationSyncer(applicationContext).handleRealtimeChatMessage(
+                                        session = session,
+                                        message = event.message,
+                                        directUserId = directUserId,
+                                        roomId = roomId,
+                                        roomName = roomId?.let { id -> targets.roomNamesById[id] }.orEmpty(),
+                                    )
+                                    if (!handledRealtime) syncRealtimeChatEvent(debounce = true)
                                 }
-                                val messageDirectUserId = event.message
-                                    .directPeerId(session.user?.id)
-                                    .takeIf { event.message.roomId.isBlank() }
-                                val directUserId = sourceUserId ?: fallbackUserId ?: messageDirectUserId
-                                val messageRoomId = event.message.roomId.takeIf { it.isNotBlank() }
-                                val roomId = sourceRoomId ?: messageRoomId
-                                val handledRealtime = BackgroundNotificationSyncer(applicationContext).handleRealtimeChatMessage(
-                                    session = session,
-                                    message = event.message,
-                                    directUserId = directUserId,
-                                    roomId = roomId,
-                                    roomName = roomId?.let { id -> targets.roomNamesById[id] }.orEmpty(),
-                                )
-                                if (!handledRealtime) syncRealtimeChatEvent(debounce = true)
+                                is ChatStreamingEvent.MessageDeleted -> syncRealtimeChatEvent(debounce = true)
+                                ChatStreamingEvent.Unauthorized -> unauthorized = true
+                                ChatStreamingEvent.Connecting,
+                                ChatStreamingEvent.Connected,
+                                ChatStreamingEvent.Closed,
+                                is ChatStreamingEvent.Error,
+                                -> Unit
                             }
-                            is ChatStreamingEvent.MessageDeleted -> syncRealtimeChatEvent(debounce = true)
-                            ChatStreamingEvent.Unauthorized -> unauthorized = true
-                            ChatStreamingEvent.Connecting,
-                            ChatStreamingEvent.Connected,
-                            ChatStreamingEvent.Closed,
-                            is ChatStreamingEvent.Error,
-                            -> Unit
                         }
                     }
+                    val watcherJob = launch {
+                        watchRealtimeChatTargets(session = session, currentTargets = targets, streamJob = streamJob)
+                    }
+                    streamJob.join()
+                    watcherJob.cancel()
                 }
             }
             if (unauthorized) {
@@ -234,7 +257,46 @@ class RealtimeNotificationService : Service() {
         stopSelf()
     }
 
+    private suspend fun watchRealtimeChatTargets(
+        session: AccountSession,
+        currentTargets: RealtimeChatStreamTargets,
+        streamJob: Job,
+    ) {
+        val syncer = BackgroundNotificationSyncer(applicationContext)
+        var current = currentTargets
+        while (streamJob.isActive && scope.isActive) {
+            delay(idleSyncIntervalMs(CHAT_TARGET_REFRESH_INTERVAL_MS, CHAT_TARGET_REFRESH_MAX_INTERVAL_MS))
+            if (!streamJob.isActive) break
+            val next = syncer.loadRealtimeChatStreamTargets(session)
+            if (next.isEmpty || next.roomIdSet != current.roomIdSet || next.userIdSet != current.userIdSet) {
+                streamJob.cancel()
+                break
+            }
+            current = next
+        }
+    }
+
+    private suspend fun runIdleGovernorLoop() {
+        val settings = AndroidBackgroundNotificationStore(applicationContext)
+        while (scope.isActive && settings.isBackgroundSyncEnabled()) {
+            if (System.currentTimeMillis() - lastRealtimeActivityAt >= IDLE_HIBERNATE_AFTER_MS) {
+                hibernateForIdle()
+                return
+            }
+            renewRealtimeWakeLock()
+            delay(WAKE_LOCK_RENEW_INTERVAL_MS)
+        }
+    }
+
+    private fun hibernateForIdle() {
+        hibernatedDueToIdle = true
+        shouldScheduleRecovery = false
+        releaseRealtimeWakeLock()
+        stopSelf()
+    }
+
     private suspend fun syncNotificationEvent(notification: NotificationItem? = null) {
+        noteRealtimeActivity()
         notification?.let {
             publishStreamingNotification(it)
             emitStreamingNotificationAutomation(it)
@@ -243,11 +305,10 @@ class RealtimeNotificationService : Service() {
         syncer.sync(trigger = BackgroundNotificationSyncTrigger.RealtimeNotification)
         delay(NOTIFICATION_EVENT_RECHECK_DELAY_MS)
         syncer.sync(trigger = BackgroundNotificationSyncTrigger.RealtimeNotification)
-        delay(NOTIFICATION_EVENT_LATE_RECHECK_DELAY_MS)
-        syncer.sync(trigger = BackgroundNotificationSyncTrigger.RealtimeNotification)
     }
 
     private suspend fun syncTimelineEvent(event: MainStreamingEvent.TimelineNote) {
+        noteRealtimeActivity()
         publishSpecialCareTimelineNote(event)
         if (!hasEnabledTimelineAutomationRules()) return
         val now = System.currentTimeMillis()
@@ -284,6 +345,7 @@ class RealtimeNotificationService : Service() {
     }
 
     private suspend fun syncRealtimeChatEvent(debounce: Boolean = false) {
+        noteRealtimeActivity()
         if (debounce) {
             val now = System.currentTimeMillis()
             if (now - lastRealtimeChatSyncAt < CHAT_SYNC_DEBOUNCE_MS) return
@@ -449,6 +511,40 @@ class RealtimeNotificationService : Service() {
         realtimeWakeLock = null
     }
 
+    private fun noteRealtimeActivity() {
+        lastRealtimeActivityAt = System.currentTimeMillis()
+    }
+
+    private fun idleSyncIntervalMs(baseMs: Long, maxMs: Long): Long {
+        val idleMs = System.currentTimeMillis() - lastRealtimeActivityAt
+        if (idleMs < IDLE_BACKOFF_START_MS) return baseMs
+        val steps = ((idleMs - IDLE_BACKOFF_START_MS) / IDLE_BACKOFF_STEP_MS)
+            .toInt()
+            .coerceAtMost(IDLE_BACKOFF_MAX_STEPS)
+        var intervalMs = baseMs
+        repeat(steps) { intervalMs *= 2L }
+        return intervalMs.coerceAtMost(maxMs)
+    }
+
+    private fun MainStreamingEvent.isRealtimeActivitySignal(): Boolean = when (this) {
+        is MainStreamingEvent.NotificationReceived,
+        is MainStreamingEvent.ChatMessageReceived,
+        is MainStreamingEvent.ChatMessageDeleted,
+        MainStreamingEvent.NewChatMessage,
+        MainStreamingEvent.UnreadNotification,
+        MainStreamingEvent.ReadAllNotifications,
+        is MainStreamingEvent.TimelineNote,
+        -> true
+        else -> false
+    }
+
+    private fun ChatStreamingEvent.isRealtimeActivitySignal(): Boolean = when (this) {
+        is ChatStreamingEvent.MessageReceived,
+        is ChatStreamingEvent.MessageDeleted,
+        -> true
+        else -> false
+    }
+
     private fun ChatMessage.directPeerId(currentUserId: String?): String? {
         val cleanCurrentUserId = currentUserId?.trim().orEmpty()
         val recipientId = toUserId?.trim()?.takeIf { it.isNotEmpty() }
@@ -463,15 +559,30 @@ class RealtimeNotificationService : Service() {
     }
 
     companion object {
+        @Volatile
+        private var instanceRunning = false
+
+        @Volatile
+        internal var hibernatedDueToIdle = false
+            private set
+
+        internal fun isRunning(): Boolean = instanceRunning
+
         private const val SERVICE_NOTIFICATION_ID = 1001
         private const val RECONNECT_DELAY_MS = 3_000L
         private const val TIMELINE_SYNC_DEBOUNCE_MS = 2_000L
         private const val CHAT_SYNC_DEBOUNCE_MS = 3_000L
         private const val CHAT_EVENT_RECHECK_DELAY_MS = 1_500L
         private const val CHAT_TARGET_REFRESH_INTERVAL_MS = 30_000L
+        private const val CHAT_TARGET_REFRESH_MAX_INTERVAL_MS = 300_000L
         private const val NOTIFICATION_EVENT_RECHECK_DELAY_MS = 1_500L
-        private const val NOTIFICATION_EVENT_LATE_RECHECK_DELAY_MS = 4_000L
         private const val POLLING_SAFETY_INTERVAL_MS = 30_000L
+        private const val POLLING_SAFETY_MAX_INTERVAL_MS = 300_000L
+        private const val WAKE_LOCK_RENEW_INTERVAL_MS = 60_000L
+        private const val IDLE_HIBERNATE_AFTER_MS = 30 * 60 * 1_000L
+        private const val IDLE_BACKOFF_START_MS = 10 * 60 * 1_000L
+        private const val IDLE_BACKOFF_STEP_MS = 5 * 60 * 1_000L
+        private const val IDLE_BACKOFF_MAX_STEPS = 3
         private const val REALTIME_WAKE_LOCK_TIMEOUT_MS = 2 * 60 * 1000L
         private const val MAX_REALTIME_SEEN_IDS = 1_000
         private const val MAX_STREAMING_CHANNELS = 4
