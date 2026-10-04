@@ -60,8 +60,6 @@ data class UserProfileUiState(
     val avatarUploadCooldownSeconds: Int = 0,
     /** 今日头像上传剩余次数 */
     val avatarDailyUploadRemaining: Int = AVATAR_DAILY_UPLOAD_LIMIT,
-    /** 待确认上传的头像文件，非 null 时 UI 应显示预览确认对话框 */
-    val pendingAvatarUpload: DriveFileUpload? = null,
 )
 
 class UserProfileStateHolder(
@@ -308,44 +306,12 @@ class UserProfileStateHolder(
     }
 
     /**
-     * 设置待确认上传的头像文件
-     * 选图后调用此方法，UI 会显示预览确认对话框
+     * 选择头像文件后直接上传，不再要求用户二次确认。
+     * 文件校验、冷却时间和每日次数限制统一由 [updateAvatar] 处理。
      * @param upload 头像文件上传数据
      */
-    fun setPendingAvatar(upload: DriveFileUpload) {
-        // 先校验文件，校验失败直接提示错误
-        val validationError = validateAvatarFile(upload)
-        if (validationError != null) {
-            mutableState.update {
-                it.copy(
-                    profileEditErrorMessage = validationError,
-                    message = null,
-                    requiresRelogin = false,
-                )
-            }
-            return
-        }
-        // 校验通过，设置待确认状态
-        mutableState.update {
-            it.copy(pendingAvatarUpload = upload)
-        }
-    }
-
-    /**
-     * 确认上传待确认的头像
-     * 清除待确认状态后直接调用 updateAvatar，图片裁剪和压缩统一由 processAvatarImage 处理
-     */
-    fun confirmPendingAvatar() {
-        val pending = state.value.pendingAvatarUpload ?: return
-        mutableState.update { it.copy(pendingAvatarUpload = null) }
-        updateAvatar(pending)
-    }
-
-    /**
-     * 取消待确认的头像上传
-     */
-    fun cancelPendingAvatar() {
-        mutableState.update { it.copy(pendingAvatarUpload = null) }
+    fun uploadAvatar(upload: DriveFileUpload) {
+        updateAvatar(upload)
     }
 
     /**

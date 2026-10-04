@@ -40,12 +40,14 @@ import cc.hhhl.client.repository.DriveFileRepositoryResult
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -297,6 +299,50 @@ class ChatStateHolderTest {
         assertEquals(roomWithLatestMessage, holder.state.value.selectedRoom)
         assertEquals(listOf(roomWithLatestMessage), holder.state.value.rooms)
         assertEquals(listOf(message), holder.state.value.messages)
+    }
+
+    @Test
+    fun openRoomByIdWithJumpMessageIdRequestsMessageJump() = runTest {
+        val linkedRoom = sampleRoom(id = "room-link-jump")
+        val message = sampleMessage("message-jump-target", roomId = linkedRoom.id)
+        val shownRoom = linkedRoom.copy(name = "链接聊天室", membershipId = linkedRoom.id)
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(linkedRoom)),
+                showRoomResult = ChatRoomMutationRepositoryResult.RoomSaved(shownRoom),
+                refreshMessagesResult = ChatMessageRepositoryResult.Success(listOf(message)),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        assertNull(holder.state.value.specialCareJumpMessageId)
+        holder.openRoomById(linkedRoom.id, jumpMessageId = "message-jump-target")
+        advanceUntilIdle()
+
+        assertEquals("message-jump-target", holder.state.value.specialCareJumpMessageId)
+        assertEquals(linkedRoom.id, holder.state.value.selectedRoom?.id)
+    }
+
+    @Test
+    fun openRoomByIdSelectsListedRoomAndRequestsJump() = runTest {
+        val room = sampleRoom()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+        holder.openRoomById(room.id, jumpMessageId = "  ")
+        advanceUntilIdle()
+
+        // 空白 jumpMessageId 不触发定位
+        assertNull(holder.state.value.specialCareJumpMessageId)
+        assertEquals(room.id, holder.state.value.selectedRoom?.id)
     }
 
     @Test
@@ -1669,6 +1715,32 @@ class ChatStateHolderTest {
         assertEquals(streamed.fromUser.id, activeMember.user.id)
         assertEquals("active", activeMember.user.onlineStatus)
         assertTrue(activeMember.membershipId.startsWith(CHAT_ROOM_INFERRED_ACTIVE_MEMBER_PREFIX))
+    }
+
+    /**
+     * 测试：连接反复闪断时，累计重连次数存在上限，不会无限重连
+     */
+    @Test
+    fun flappingStreamStopsAfterLifetimeRetryCap() = runTest {
+        val room = sampleRoom()
+        var subscribeCallCount = 0
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+            ),
+            streamingRepository = flappingStreamingRepository {
+                subscribeCallCount++
+            },
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+
+        assertEquals(9, subscribeCallCount)
+        assertFalse(holder.state.value.isStreamingMessages)
+        assertTrue(holder.state.value.streamingErrorMessage != null)
     }
 
     @Test
@@ -3640,6 +3712,43 @@ class ChatStateHolderTest {
         }
     }
 
+    /**
+     * 构造一个反复闪断的流式仓库：每次订阅都会先收到 Connected，紧接着收到 Error 并结束流，
+     * 用于验证累计重连次数存在上限，连接反复闪断时不会无限重连。
+     */
+    private fun flappingStreamingRepository(
+        onSubscribe: () -> Unit,
+    ): ChatStreamingRepository {
+        val flappingFlow = flowOf(
+            ChatStreamingEvent.Connected,
+            ChatStreamingEvent.Error("boom"),
+        )
+        return object : ChatStreamingRepository(
+            tokenProvider = { "token-123" },
+            api = object : cc.hhhl.client.api.ChatStreamingApi {
+                override fun streamRoomMessages(
+                    token: String,
+                    roomId: String,
+                ): Flow<ChatStreamingEvent> = flappingFlow
+
+                override fun streamUserMessages(
+                    token: String,
+                    userId: String,
+                ): Flow<ChatStreamingEvent> = flappingFlow
+            },
+        ) {
+            override fun streamRoomMessages(roomId: String): Flow<ChatStreamingEvent> {
+                onSubscribe()
+                return flappingFlow
+            }
+
+            override fun streamUserMessages(userId: String): Flow<ChatStreamingEvent> {
+                onSubscribe()
+                return flappingFlow
+            }
+        }
+    }
+
     private fun fakeDriveRepository(result: DriveFileRepositoryResult): DriveFileRepository {
         return fakeDriveRepository { result }
     }
@@ -4251,6 +4360,99 @@ class ChatStateHolderTest {
         val members = holder.state.value.recentChatMembers
         assertEquals(1, members.size)
         assertEquals("user-bob", members[0].user.id)
+    }
+
+    /**
+     * 测试：中文（非 ASCII 字母）后输入 @ 仍触发选择器
+     *
+     * 中文属于 isLetterOrDigit()，但不应被当作邮箱前缀而误判为不触发
+     */
+    @Test
+    fun atSymbolAfterChineseCharacterTriggersMentionPicker() = runTest {
+        val room = sampleRoom()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+        holder.updateMessageDraft("你好@")
+
+        assertTrue(holder.state.value.mentionPickerVisible)
+        assertEquals("", holder.state.value.mentionSearchQuery)
+    }
+
+    /**
+     * 测试：ASCII 字母后输入 @ 不触发选择器（视为邮箱地址）
+     */
+    @Test
+    fun atSymbolAfterLatinWordDoesNotTriggerMentionPicker() = runTest {
+        val room = sampleRoom()
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+        holder.updateMessageDraft("hello@")
+
+        assertFalse(holder.state.value.mentionPickerVisible)
+    }
+
+    /**
+     * 测试：getFilteredMentionMembers 前缀匹配优先于包含匹配
+     */
+    @Test
+    fun getFilteredMentionMembersRanksPrefixMatchesFirst() = runTest {
+        val room = sampleRoom()
+        val angela = User("user-angela", "Angela", "angela", "A")
+        val diana = User("user-diana", "Diana", "diana", "D")
+        val zoe = User("user-zoe", "Zoe", "an", "Z")
+        val messageAngela = sampleMessage("msg-a", text = "a").copy(
+            fromUser = angela,
+            createdAt = "2026-06-01T10:00:00Z",
+        )
+        val messageZoe = sampleMessage("msg-z", text = "z").copy(
+            fromUser = zoe,
+            createdAt = "2026-06-02T10:00:00Z",
+        )
+        val messageDiana = sampleMessage("msg-d", text = "d").copy(
+            fromUser = diana,
+            createdAt = "2026-06-03T10:00:00Z",
+        )
+        val holder = ChatStateHolder(
+            repository = fakeRepository(
+                result = ChatRepositoryResult.Success(listOf(room)),
+                refreshMessagesResult = ChatMessageRepositoryResult.Success(
+                    listOf(messageAngela, messageZoe, messageDiana),
+                ),
+            ),
+            scope = TestScope(testScheduler),
+            accountIdProvider = { "current-user" },
+        )
+
+        holder.updateAvailability(chatAvailable = true)
+        holder.selectRoom(room)
+        advanceUntilIdle()
+        holder.loadRecentChatMembers()
+        advanceUntilIdle()
+
+        holder.updateMessageDraft("@an")
+        val filtered = holder.getFilteredMentionMembers()
+
+        // Angela 昵称前缀匹配 > Zoe 用户名前缀匹配 > Diana 昵称包含匹配
+        assertEquals(
+            listOf("user-angela", "user-zoe", "user-diana"),
+            filtered.map { it.user.id },
+        )
     }
 
     // endregion

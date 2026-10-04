@@ -847,43 +847,25 @@ class UserProfileStateHolderTest {
     }
 
     @Test
-    fun setPendingAvatarStoresValidUpload() = runTest {
+    fun uploadAvatarRejectsInvalidUpload() = runTest {
         val holder = createAvatarTestHolder()
         holder.load()
         advanceUntilIdle()
 
-        val upload = cc.hhhl.client.api.DriveFileUpload(
-            bytes = ByteArray(1024),
-            contentType = "image/png",
-            fileName = "avatar.png",
-        )
-        holder.setPendingAvatar(upload)
-
-        // 验证待确认状态已设置
-        assertEquals(upload, holder.state.value.pendingAvatarUpload)
-    }
-
-    @Test
-    fun setPendingAvatarRejectsInvalidUpload() = runTest {
-        val holder = createAvatarTestHolder()
-        holder.load()
-        advanceUntilIdle()
-
-        // 空文件应被拒绝
+        // 空文件应被拒绝，且不进入待确认状态
         val emptyUpload = cc.hhhl.client.api.DriveFileUpload(
             bytes = ByteArray(0),
             contentType = "image/png",
             fileName = "avatar.png",
         )
-        holder.setPendingAvatar(emptyUpload)
+        holder.uploadAvatar(emptyUpload)
+        advanceUntilIdle()
 
-        // 验证待确认状态未设置，且显示错误信息
-        assertEquals(null, holder.state.value.pendingAvatarUpload)
         assertNotNull(holder.state.value.profileEditErrorMessage)
     }
 
     @Test
-    fun confirmPendingAvatarCropsImageWhenProcessorAvailable() = runTest {
+    fun uploadAvatarCropsImageWhenProcessorAvailable() = runTest {
         var cropCalled = false
         val testProcessor = object : cc.hhhl.client.media.ImageProcessor {
             override suspend fun compressImage(
@@ -925,19 +907,19 @@ class UserProfileStateHolderTest {
             contentType = "image/png",
             fileName = "avatar.png",
         )
-        holder.setPendingAvatar(upload)
-        holder.confirmPendingAvatar()
+        holder.uploadAvatar(upload)
         advanceUntilIdle()
 
-        // 验证裁剪被调用
+        // 选择后直接上传，无需二次确认
         assertTrue(cropCalled)
-        // 验证待确认状态已清除
-        assertEquals(null, holder.state.value.pendingAvatarUpload)
     }
 
     @Test
-    fun confirmPendingAvatarUploadsOriginalWhenNoProcessor() = runTest {
-        val holder = createAvatarTestHolder()
+    fun uploadAvatarUploadsOriginalWhenNoProcessor() = runTest {
+        val uploaded = mutableListOf<cc.hhhl.client.api.DriveFileUpload>()
+        val holder = createAvatarTestHolder(
+            onUpload = { upload -> uploaded.add(upload) },
+        )
         holder.load()
         advanceUntilIdle()
 
@@ -946,32 +928,11 @@ class UserProfileStateHolderTest {
             contentType = "image/png",
             fileName = "avatar.png",
         )
-        holder.setPendingAvatar(upload)
-        holder.confirmPendingAvatar()
+        holder.uploadAvatar(upload)
         advanceUntilIdle()
 
-        // 验证待确认状态已清除
-        assertEquals(null, holder.state.value.pendingAvatarUpload)
-    }
-
-    @Test
-    fun cancelPendingAvatarClearsState() = runTest {
-        val holder = createAvatarTestHolder()
-        holder.load()
-        advanceUntilIdle()
-
-        val upload = cc.hhhl.client.api.DriveFileUpload(
-            bytes = ByteArray(1024),
-            contentType = "image/png",
-            fileName = "avatar.png",
-        )
-        holder.setPendingAvatar(upload)
-        assertEquals(upload, holder.state.value.pendingAvatarUpload)
-
-        holder.cancelPendingAvatar()
-
-        // 验证待确认状态已清除
-        assertEquals(null, holder.state.value.pendingAvatarUpload)
+        // 无图片处理器时也应直接把原图上传到 Drive
+        assertEquals(listOf("avatar.png"), uploaded.map { it.fileName })
     }
 
     @Test

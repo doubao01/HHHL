@@ -11,6 +11,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -84,9 +85,13 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
@@ -236,7 +241,8 @@ private val ChatMessageTelegramTailHeight = 9.dp
 private val ChatMessageTelegramTailAnchorY = 8.dp
 private val ChatMessageTelegramBubbleRadius = 21.dp
 private val ChatMessageAvatarTopPadding = 13.dp
-private val ChatMessageBubbleMaxWidth = 340.dp
+private const val CHAT_MESSAGE_BUBBLE_MAX_WIDTH_FRACTION = 0.80f
+private val ChatMessageBubbleMinMaxWidth = 240.dp
 private val ChatMessageMetaNameMaxWidth = 176.dp
 
 @Composable
@@ -1691,7 +1697,7 @@ private fun ChatDetailScreen(
     var showingMessageFilters by remember(conversationKey) { mutableStateOf(false) }
     
     // 加载最近聊天成员用于@功能
-    LaunchedEffect(room?.id, state.messages) {
+    LaunchedEffect(room?.id, state.messages.chatMessageIdFingerprint()) {
         if (room != null && state.messages.isNotEmpty()) {
             onLoadRecentChatMembers()
         }
@@ -2319,6 +2325,7 @@ private fun ChatDetailScreen(
                             customEmojis = customEmojis,
                             recentEmojiCodes = recentEmojiCodes,
                             isReactionPending = state.pendingMessageReactionIds.contains(message.id),
+                            showPresence = message.fromUser.showsChatPresenceIndicator(),
                             alignment = chatMessageAlignment(message, currentUserId),
                             onQuote = onQuoteMessage,
                             onReply = onReplyMessage,
@@ -2415,7 +2422,9 @@ private fun ChatDetailScreen(
             }
             // @成员选择弹窗
             if (state.mentionPickerVisible) {
-                val filteredMembers = onGetFilteredMentionMembers()
+                val filteredMembers = remember(state.mentionSearchQuery, state.recentChatMembers) {
+                    onGetFilteredMentionMembers()
+                }
                 ChatMentionPickerPopup(
                     members = filteredMembers,
                     searchQuery = state.mentionSearchQuery,
@@ -5168,6 +5177,7 @@ private fun ChatMessageRow(
     customEmojis: List<CustomEmoji>,
     recentEmojiCodes: List<String>,
     isReactionPending: Boolean,
+    showPresence: Boolean,
     alignment: ChatMessageAlignment,
     onQuote: (String) -> Unit,
     onReply: (String) -> Unit,
@@ -5275,20 +5285,25 @@ private fun ChatMessageRow(
     } else {
         colors.textMuted
     }
-    Row(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 7.dp),
-        horizontalArrangement = if (isOutgoing) {
-            Arrangement.End
-        } else {
-            Arrangement.spacedBy(8.dp, Alignment.Start)
-        },
-        verticalAlignment = Alignment.Top,
     ) {
+        val bubbleMaxWidth = chatMessageBubbleMaxWidth(maxWidth)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = if (isOutgoing) {
+                Arrangement.End
+            } else {
+                Arrangement.spacedBy(8.dp, Alignment.Start)
+            },
+            verticalAlignment = Alignment.Top,
+        ) {
         if (!isOutgoing) {
             ChatMessageAvatar(
                 message = message,
+                showPresence = showPresence,
                 presslessInteractionSource = presslessInteractionSource,
                 onOpenUser = onOpenUser,
                 onMentionUser = onMentionUser,
@@ -5297,7 +5312,7 @@ private fun ChatMessageRow(
         Column(
             modifier = Modifier
                 .weight(1f, fill = false)
-                .widthIn(max = ChatMessageBubbleMaxWidth),
+                .widthIn(max = bubbleMaxWidth),
             horizontalAlignment = if (isOutgoing) Alignment.End else Alignment.Start,
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
@@ -5308,7 +5323,7 @@ private fun ChatMessageRow(
                 overflowActions = overflowActions,
                 onOpenUser = onOpenUser,
                 presslessInteractionSource = presslessInteractionSource,
-                modifier = Modifier.widthIn(max = ChatMessageBubbleMaxWidth),
+                modifier = Modifier.widthIn(max = bubbleMaxWidth),
             )
             ChatMessageTelegramBubbleSurface(
                 isOutgoing = isOutgoing,
@@ -5317,7 +5332,7 @@ private fun ChatMessageRow(
                 shadowColor = colors.shadow,
                 isDarkSurface = isDarkSurface,
                 modifier = Modifier
-                    .widthIn(max = ChatMessageBubbleMaxWidth)
+                    .widthIn(max = bubbleMaxWidth)
                     .combinedClickable(
                         interactionSource = presslessInteractionSource,
                         indication = null,
@@ -5443,10 +5458,12 @@ private fun ChatMessageRow(
             Spacer(modifier = Modifier.width(8.dp))
             ChatMessageAvatar(
                 message = message,
+                showPresence = showPresence,
                 presslessInteractionSource = presslessInteractionSource,
                 onOpenUser = onOpenUser,
                 onMentionUser = onMentionUser,
             )
+        }
         }
     }
 }
@@ -5454,10 +5471,12 @@ private fun ChatMessageRow(
 @Composable
 private fun ChatMessageAvatar(
     message: ChatMessage,
+    showPresence: Boolean,
     presslessInteractionSource: MutableInteractionSource,
     onOpenUser: (String) -> Unit,
     onMentionUser: (User) -> Unit,
 ) {
+    val colors = LocalHhhlColors.current
     Box(
         modifier = Modifier
             .padding(top = ChatMessageAvatarTopPadding)
@@ -5473,6 +5492,16 @@ private fun ChatMessageAvatar(
             avatarUrl = message.fromUser.avatarUrl,
             avatarDecorations = message.fromUser.avatarDecorations,
         )
+        if (showPresence) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .size(10.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(colors.success)
+                    .border(1.5.dp, colors.pageBackground, RoundedCornerShape(50)),
+            )
+        }
     }
 }
 
@@ -6575,6 +6604,15 @@ fun chatComposerSendActionLabel(isSendingMessage: Boolean): String {
     return if (isSendingMessage) "发送中" else "发送"
 }
 
+/**
+ * @成员选择弹窗空状态文案
+ *
+ * 未输入关键词时通常是没有可@的成员，输入关键词后才是搜索无结果
+ */
+fun chatMentionEmptyStateText(searchQuery: String): String {
+    return if (searchQuery.isBlank()) "还没有可@的成员" else "未找到匹配的成员"
+}
+
 fun chatSpecialCareToastMessage(
     displayName: String,
     isSpecialCare: Boolean,
@@ -7231,7 +7269,15 @@ private fun ChatMentionPickerPopup(
     onMemberSelected: (ChatRecentMember) -> Unit,
 ) {
     val colors = LocalHhhlColors.current
-    
+    val listState = rememberLazyListState()
+
+    // 搜索关键词变化时回到列表顶部，让排名最靠前的匹配项始终可见
+    LaunchedEffect(searchQuery, members.size) {
+        if (members.isNotEmpty() && listState.firstVisibleItemIndex != 0) {
+            listState.scrollToItem(0)
+        }
+    }
+
     if (members.isEmpty()) {
         // 空状态提示
         Column(
@@ -7245,7 +7291,7 @@ private fun ChatMentionPickerPopup(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
-                text = "未找到匹配的成员",
+                text = chatMentionEmptyStateText(searchQuery),
                 style = MaterialTheme.typography.bodyMedium,
                 color = colors.textSecondary,
             )
@@ -7282,6 +7328,7 @@ private fun ChatMentionPickerPopup(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
         )
         LazyColumn(
+            state = listState,
             modifier = Modifier.fillMaxWidth(),
         ) {
             items(
@@ -7325,8 +7372,9 @@ private fun ChatMentionMemberRow(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Avatar(
-            url = member.user.avatarUrl,
+            avatarUrl = member.user.avatarUrl,
             initial = member.user.avatarInitial,
+            avatarDecorations = member.user.avatarDecorations,
             size = 36.dp,
         )
         Column(
@@ -7363,9 +7411,13 @@ private fun ChatMentionMemberRow(
                 )
             }
         }
-        // 互动次数标签
+        // 互动次数标签（无互动记录的群成员补充来源显示为「群成员」）
         Text(
-            text = "${member.interactionCount}条消息",
+            text = if (member.interactionCount > 0) {
+                "${member.interactionCount}条消息"
+            } else {
+                "群成员"
+            },
             style = MaterialTheme.typography.labelSmall,
             color = colors.textMuted,
         )
@@ -7687,16 +7739,20 @@ private fun ChatRoomMember.matchesChatRoomMemberQuery(query: String): Boolean {
         user.host.orEmpty().contains(query, ignoreCase = true)
 }
 
+internal fun chatMessageBubbleMaxWidth(availableWidth: Dp): Dp {
+    val fractional = availableWidth * CHAT_MESSAGE_BUBBLE_MAX_WIDTH_FRACTION
+    return if (fractional < ChatMessageBubbleMinMaxWidth) ChatMessageBubbleMinMaxWidth else fractional
+}
+
+internal fun User.showsChatPresenceIndicator(): Boolean {
+    val status = onlineStatus.trim()
+    return status.equals("online", ignoreCase = true) ||
+        status.equals("active", ignoreCase = true)
+}
+
 private fun ChatRoomMember.isOnlineChatMember(recentlyActiveUserIds: Set<String>): Boolean {
-    val status = user.onlineStatus.trim()
     val recentlyActive = user.id in recentlyActiveUserIds || isInferredActiveChatMember()
-    return when {
-        recentlyActive -> true
-        status.equals("online", ignoreCase = true) ||
-            status.equals("active", ignoreCase = true) -> true
-        status.equals("offline", ignoreCase = true) -> false
-        else -> false
-    }
+    return recentlyActive || user.showsChatPresenceIndicator()
 }
 
 private fun ChatRoomMember.isInferredActiveChatMember(): Boolean {

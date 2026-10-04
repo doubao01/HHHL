@@ -70,9 +70,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.graphics.vector.ImageVector
 import coil3.compose.AsyncImage
-import kotlin.io.encoding.Base64
-import kotlin.io.encoding.ExperimentalEncodingApi
-import cc.hhhl.client.api.DriveFileUpload
 import cc.hhhl.client.api.USER_PROFILE_DESCRIPTION_MAX_LENGTH
 import cc.hhhl.client.api.USER_PROFILE_NAME_MAX_LENGTH
 import cc.hhhl.client.display.TimelineDensity
@@ -80,8 +77,6 @@ import cc.hhhl.client.model.InstanceCapabilities
 import cc.hhhl.client.model.Note
 import cc.hhhl.client.model.User
 import cc.hhhl.client.model.UserSocialKind
-import kotlin.io.encoding.Base64
-import kotlin.io.encoding.ExperimentalEncodingApi
 import cc.hhhl.client.state.AVATAR_DAILY_UPLOAD_LIMIT
 import cc.hhhl.client.state.UserProfileUiState
 import cc.hhhl.client.theme.HhhlThemePreset
@@ -192,9 +187,6 @@ fun ProfileScreen(
     onChangeAvatar: (() -> Unit)? = null,
     onSelectPresetAvatar: ((String) -> Unit)? = null,
     onTakePhoto: (() -> Unit)? = null,
-    pendingAvatarUpload: DriveFileUpload? = null,
-    onConfirmAvatar: () -> Unit = {},
-    onCancelAvatar: () -> Unit = {},
     onOpenSocial: (UserSocialKind) -> Unit = {},
     onOpenDrive: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
@@ -233,15 +225,6 @@ fun ProfileScreen(
             profileEditorOpen = false
             profileEditSubmitted = false
         }
-    }
-
-    // 头像预览确认对话框：选图后先预览，用户确认后才上传
-    if (pendingAvatarUpload != null) {
-        AvatarPreviewConfirmDialog(
-            upload = pendingAvatarUpload,
-            onConfirm = onConfirmAvatar,
-            onCancel = onCancelAvatar,
-        )
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -2256,74 +2239,6 @@ private fun AvatarFullImageDialog(
         confirmButton = {
             HhhlTextButton(onClick = onDismiss) {
                 Text("关闭")
-            }
-        },
-    )
-}
-
-/**
- * 头像预览确认对话框
- * 选图后显示预览，图片以裁剪模式显示（居中裁剪为正方形），
- * 用户确认后执行上传
- */
-@OptIn(ExperimentalEncodingApi::class)
-@Composable
-private fun AvatarPreviewConfirmDialog(
-    upload: DriveFileUpload,
-    onConfirm: () -> Unit,
-    onCancel: () -> Unit,
-) {
-    // 将文件字节编码为 data URL 供 AsyncImage 加载
-    val dataUrl = remember(upload) {
-        val safeContentType = upload.contentType.takeIf { it.startsWith("image/") } ?: "image/jpeg"
-        "data:$safeContentType;base64,${Base64.encode(upload.bytes)}"
-    }
-
-    HhhlAlertDialog(
-        onDismissRequest = onCancel,
-        title = { Text("确认更换头像") },
-        text = {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                // 预览区域：使用 Crop 模式模拟正方形裁剪效果
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(1f)
-                        .background(
-                            color = LocalHhhlColors.current.mediaBackground,
-                            shape = RoundedCornerShape(8.dp)
-                        )
-                        .clip(RoundedCornerShape(8.dp)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    AsyncImage(
-                        model = dataUrl,
-                        contentDescription = "头像预览",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
-                // 裁剪提示
-                Text(
-                    text = "图片将自动裁剪为正方形头像",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = LocalHhhlColors.current.textMuted,
-                    modifier = Modifier.fillMaxWidth(),
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                )
-            }
-        },
-        confirmButton = {
-            HhhlTextButton(onClick = onConfirm) {
-                Text("确认上传")
-            }
-        },
-        dismissButton = {
-            HhhlTextButton(onClick = onCancel) {
-                Text("取消")
             }
         },
     )

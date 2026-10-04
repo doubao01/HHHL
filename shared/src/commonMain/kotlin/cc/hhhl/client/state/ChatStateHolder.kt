@@ -43,6 +43,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -162,6 +163,7 @@ private const val MAX_RECENT_MENTION_MEMBERS = 20
 
 /** WebSocket 重试相关常量 */
 private const val STREAMING_MAX_RETRIES = 3
+private const val STREAMING_MAX_LIFETIME_RETRIES = 9
 private const val STREAMING_INITIAL_RETRY_DELAY_MS = 1000L
 private const val STREAMING_MAX_RETRY_DELAY_MS = 30000L
 
@@ -782,9 +784,13 @@ class ChatStateHolder(
         }
     }
 
-    fun openRoomById(roomId: String) {
+    fun openRoomById(
+        roomId: String,
+        jumpMessageId: String? = null,
+    ) {
         val cleanRoomId = roomId.trim()
         if (cleanRoomId.isEmpty()) return
+        val cleanJumpMessageId = jumpMessageId?.trim()?.takeIf { it.isNotEmpty() }
         if (!state.value.chatAvailable) {
             mutableState.update {
                 it.copy(errorMessage = "实例未启用聊天", messageErrorMessage = "实例未启用聊天")
@@ -794,6 +800,7 @@ class ChatStateHolder(
 
         state.value.rooms.firstOrNull { it.id == cleanRoomId }?.let { room ->
             selectRoom(room)
+            requestOpenRoomJumpMessage(cleanJumpMessageId)
             return
         }
         if (state.value.isManagingRoom) return
@@ -865,6 +872,19 @@ class ChatStateHolder(
                 it.copy(isManagingRoom = false, roomManagementMessage = "已加入聊天室", requiresRelogin = false)
             }
             selectRoom(refreshedRoom ?: shownRoom.withStableMembershipId())
+            requestOpenRoomJumpMessage(cleanJumpMessageId)
+        }
+    }
+
+    /**
+     * 打开聊天室后请求定位到指定消息（复用 @提醒跳转通道）
+     *
+     * 消息未加载时由界面侧逐页加载历史消息直至命中
+     */
+    private fun requestOpenRoomJumpMessage(messageId: String?) {
+        if (messageId == null) return
+        mutableState.update {
+            it.copy(specialCareJumpMessageId = messageId)
         }
     }
 
@@ -1887,9 +1907,10 @@ class ChatStateHolder(
         for (i in cursorPosition - 1 downTo 0) {
             val char = text[i]
             if (char == '@') {
-                // 如果@前面是字母或数字，可能是邮箱地址的一部分，跳过
+                // 如果@前面是 ASCII 字母或数字，可能是邮箱地址的一部分，跳过
                 // 例如：user@email.com 不应该触发
-                if (i > 0 && text[i - 1].isLetterOrDigit()) {
+                // 注意：中文/全角字符也是 isLetterOrDigit()，但不能当作邮箱，否则「你好@」无法触发
+                if (i > 0 && text[i - 1].isAsciiLetterOrDigit()) {
                     continue
                 }
                 // 其他情况（行首、空白、中文、标点等）都触发@mention
@@ -1972,7 +1993,8 @@ class ChatStateHolder(
         messages: List<ChatMessage>,
         currentUserId: String?,
     ): List<ChatRecentMember> {
-        val userInteractionMap = mutableMapOf<String, MutableList<Long>>()
+        val lastInteractionMap = mutableMapOf<String, Long>()
+        val interactionCountMap = mutableMapOf<String, Int>()
         val userMap = mutableMapOf<String, User>()
 
         for (message in messages) {
@@ -1982,19 +2004,19 @@ class ChatStateHolder(
             val timestamp = parseMessageTimestamp(message.createdAt)
             if (timestamp == 0L) continue
 
-            // 记录发送者的互动时间
-            userInteractionMap.getOrPut(senderId) { mutableListOf() }.add(timestamp)
+            // 记录发送者的最近互动时间与互动次数
+            lastInteractionMap[senderId] = maxOf(lastInteractionMap[senderId] ?: 0L, timestamp)
+            interactionCountMap[senderId] = (interactionCountMap[senderId] ?: 0) + 1
             userMap[senderId] = message.fromUser
         }
 
         // 转换为 ChatRecentMember 列表并按最近互动时间排序
-        return userInteractionMap.map { (userId, timestamps) ->
+        return lastInteractionMap.map { (userId, lastInteractionTime) ->
             val user = userMap[userId] ?: return@map null
-            val sortedTimestamps = timestamps.sortedDescending()
             ChatRecentMember(
                 user = user,
-                lastInteractionTime = sortedTimestamps.first(),
-                interactionCount = timestamps.size,
+                lastInteractionTime = lastInteractionTime,
+                interactionCount = interactionCountMap[userId] ?: 0,
             )
         }.filterNotNull()
             .sortedByDescending { it.lastInteractionTime }
@@ -2085,6 +2107,13 @@ class ChatStateHolder(
     /**
      * 获取过滤后的@提及成员列表
      * 根据搜索关键词过滤最近聊天的群成员
+     *
+     * 排序优先级（越靠前越优先）：
+     * 1. 昵称前缀匹配
+     * 2. 用户名前缀匹配
+     * 3. 昵称包含匹配
+     * 4. 用户名包含匹配
+     * 相同优先级保持原有顺序（最近互动优先）
      */
     fun getFilteredMentionMembers(): List<ChatRecentMember> {
         val current = state.value
@@ -2093,10 +2122,29 @@ class ChatStateHolder(
 
         if (query.isEmpty()) return members
 
-        return members.filter { member ->
-            val displayNameLower = member.user.displayName.lowercase()
-            val usernameLower = member.user.username.lowercase()
-            displayNameLower.contains(query) || usernameLower.contains(query)
+        return members
+            .mapNotNull { member ->
+                val rank = member.mentionMatchRank(query) ?: return@mapNotNull null
+                rank to member
+            }
+            .sortedBy { it.first }
+            .map { it.second }
+    }
+
+    /**
+     * 计算成员与搜索关键词的匹配优先级
+     *
+     * @return 匹配优先级（越小越靠前），不匹配返回 null
+     */
+    private fun ChatRecentMember.mentionMatchRank(query: String): Int? {
+        val displayName = user.displayName.lowercase()
+        val username = user.username.lowercase()
+        return when {
+            displayName.startsWith(query) -> 0
+            username.startsWith(query) -> 1
+            displayName.contains(query) -> 2
+            username.contains(query) -> 3
+            else -> null
         }
     }
 
@@ -4654,6 +4702,15 @@ private fun String.parseMentionAt(atIndex: Int): ParsedMention? {
     return ParsedMention(username, host)
 }
 
+/**
+ * 是否为 ASCII 字母或数字
+ *
+ * 用于邮箱误触发判断，仅限 ASCII，避免把中文/全角字符误判为邮箱前缀
+ */
+private fun Char.isAsciiLetterOrDigit(): Boolean {
+    return this in 'a'..'z' || this in 'A'..'Z' || this in '0'..'9'
+}
+
 private fun Char.isMentionPart(): Boolean {
     return isLetterOrDigit() || this == '_' || this == '-'
 }
@@ -4947,6 +5004,10 @@ private fun ChatStreamingEvent.shouldTriggerStreamingRetry(): Boolean {
  * 带重试机制的 Flow 收集器
  * 用于 WebSocket 连接的自动重连
  *
+ * `retryCount` 控制指数退避时长，每次连接成功都会重置，让网络短暂恢复后的下一次
+ * 失败仍能从较短的等待时间重新开始退避；`lifetimeRetryCount` 记录单次调用内累计
+ * 的重连次数，连接成功也不会重置，用于避免连接反复闪断时无限重连，触发服务端限流。
+ *
  * @param flowProvider 提供需要收集的 Flow
  * @param onEvent 事件处理回调，返回是否需要重试
  */
@@ -4955,9 +5016,10 @@ private suspend fun collectWithRetry(
     onEvent: suspend (ChatStreamingEvent) -> Boolean,
 ) {
     var retryCount = 0
+    var lifetimeRetryCount = 0
     var retryDelay = STREAMING_INITIAL_RETRY_DELAY_MS
 
-    while (retryCount < STREAMING_MAX_RETRIES) {
+    while (retryCount < STREAMING_MAX_RETRIES && lifetimeRetryCount < STREAMING_MAX_LIFETIME_RETRIES) {
         var shouldRetry = false
 
         flowProvider().collect { event ->
@@ -4965,7 +5027,7 @@ private suspend fun collectWithRetry(
             if (needsRetry) {
                 shouldRetry = true
             }
-            // 连接成功后重置重试计数
+            // 连接成功后重置退避计数，但不会重置累计重连次数
             if (event is ChatStreamingEvent.Connected) {
                 retryCount = 0
                 retryDelay = STREAMING_INITIAL_RETRY_DELAY_MS
@@ -4973,8 +5035,13 @@ private suspend fun collectWithRetry(
         }
 
         // Flow 结束后，检查是否需要重试
-        if (shouldRetry && retryCount < STREAMING_MAX_RETRIES - 1) {
+        if (
+            shouldRetry &&
+            retryCount < STREAMING_MAX_RETRIES - 1 &&
+            lifetimeRetryCount < STREAMING_MAX_LIFETIME_RETRIES - 1
+        ) {
             retryCount++
+            lifetimeRetryCount++
             delay(retryDelay)
             retryDelay = (retryDelay * 2).coerceAtMost(STREAMING_MAX_RETRY_DELAY_MS)
         } else {

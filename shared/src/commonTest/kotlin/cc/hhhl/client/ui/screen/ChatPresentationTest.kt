@@ -10,6 +10,7 @@ import cc.hhhl.client.model.DriveFile
 import cc.hhhl.client.model.User
 import cc.hhhl.client.state.ChatUiState
 import cc.hhhl.client.ui.component.containsValidMfmSyntax
+import androidx.compose.ui.unit.dp
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -514,6 +515,13 @@ class ChatPresentationTest {
     }
 
     @Test
+    fun chatMentionEmptyStateTextDistinguishesBlankQuery() {
+        assertEquals("还没有可@的成员", chatMentionEmptyStateText(""))
+        assertEquals("还没有可@的成员", chatMentionEmptyStateText("   "))
+        assertEquals("未找到匹配的成员", chatMentionEmptyStateText("zzz"))
+    }
+
+    @Test
     fun chatMessageUiFilterHidesMfmSyntaxUserAndRegexMatchesOnly() {
         val messages = listOf(
             chatMessage("plain", authorId = "user-1", text = "hello"),
@@ -793,6 +801,22 @@ class ChatPresentationTest {
     }
 
     @Test
+    fun chatMessageBubbleMaxWidthUsesFractionAndKeepsMinimum() {
+        assertEquals(320.dp, chatMessageBubbleMaxWidth(400.dp))
+        assertEquals(240.dp, chatMessageBubbleMaxWidth(300.dp))
+        assertEquals(240.dp, chatMessageBubbleMaxWidth(200.dp))
+    }
+
+    @Test
+    fun chatPresenceIndicatorOnlyShowsOnlineOrActiveUsers() {
+        assertEquals(true, chatUser("online-user", "Online", "online", onlineStatus = "online").showsChatPresenceIndicator())
+        assertEquals(true, chatUser("active-user", "Active", "active", onlineStatus = "ACTIVE").showsChatPresenceIndicator())
+        assertEquals(false, chatUser("offline-user", "Offline", "offline", onlineStatus = "offline").showsChatPresenceIndicator())
+        assertEquals(false, chatUser("unknown-user", "Unknown", "unknown", onlineStatus = "unknown").showsChatPresenceIndicator())
+        assertEquals(false, chatUser("blank-user", "Blank", "blank", onlineStatus = "  ").showsChatPresenceIndicator())
+    }
+
+    @Test
     fun mfmSyntaxDetectorHandlesDollarBracketAndBraceForms() {
         assertEquals(true, "$[x2 hello]".containsValidMfmSyntax())
         assertEquals(true, "${'$'}{fg.color=ff0000 hello}".containsValidMfmSyntax())
@@ -977,6 +1001,7 @@ class ChatPresentationTest {
         displayName: String,
         username: String,
         host: String? = null,
+        onlineStatus: String = "unknown",
     ): User {
         return FakeData.me.copy(
             id = id,
@@ -984,6 +1009,7 @@ class ChatPresentationTest {
             username = username,
             avatarInitial = displayName.take(1).ifBlank { username.take(1) },
             host = host,
+            onlineStatus = onlineStatus,
         )
     }
 
