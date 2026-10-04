@@ -91,6 +91,7 @@ fun NotificationsScreen(
     onRejectFollowRequest: (String) -> Unit = {},
     onOpenChat: () -> Unit = {},
     onOpenChatUser: (String, String?) -> Unit = { _, _ -> },
+    onOpenChatRoom: (String, String?) -> Unit = { _, _ -> },
     onSendTestNotification: () -> Unit = {},
     onSendReminderNotification: () -> Unit = {},
     aiEnabled: Boolean = false,
@@ -232,6 +233,7 @@ fun NotificationsScreen(
                 onRejectFollowRequest = onRejectFollowRequest,
                 onOpenChat = onOpenChat,
                 onOpenChatUser = onOpenChatUser,
+                onOpenChatRoom = onOpenChatRoom,
                 onSendTestNotification = onSendTestNotification,
                 onSendReminderNotification = onSendReminderNotification,
                 aiEnabled = aiEnabled,
@@ -376,6 +378,7 @@ private fun NotificationListContent(
     onRejectFollowRequest: (String) -> Unit,
     onOpenChat: () -> Unit,
     onOpenChatUser: (String, String?) -> Unit,
+    onOpenChatRoom: (String, String?) -> Unit,
     onSendTestNotification: () -> Unit,
     onSendReminderNotification: () -> Unit,
     aiEnabled: Boolean,
@@ -464,6 +467,7 @@ private fun NotificationListContent(
                 onRejectFollowRequest = onRejectFollowRequest,
                 onOpenChat = onOpenChat,
                 onOpenChatUser = onOpenChatUser,
+                onOpenChatRoom = onOpenChatRoom,
             )
         }
         if (state != null && notifications.isNotEmpty() && state.isLoadingMore) {
@@ -494,6 +498,7 @@ private fun NotificationRow(
     onRejectFollowRequest: (String) -> Unit,
     onOpenChat: () -> Unit,
     onOpenChatUser: (String, String?) -> Unit,
+    onOpenChatRoom: (String, String?) -> Unit,
 ) {
     val colors = LocalHhhlColors.current
     var expanded by remember(notification.id) { mutableStateOf(false) }
@@ -513,6 +518,7 @@ private fun NotificationRow(
             is NotificationNavigationTarget.NoteDetail -> onOpenNote(target.noteId)
             is NotificationNavigationTarget.UserProfile -> onOpenUser(target.userId)
             is NotificationNavigationTarget.ChatUser -> onOpenChatUser(target.userId, target.messageId)
+            is NotificationNavigationTarget.ChatRoom -> onOpenChatRoom(target.roomId, target.messageId)
             NotificationNavigationTarget.Chat -> onOpenChat()
             null -> {
                 // 没有导航目标时，才切换展开状态
@@ -1236,6 +1242,11 @@ sealed interface NotificationNavigationTarget {
         val messageId: String? = null,
     ) : NotificationNavigationTarget
 
+    data class ChatRoom(
+        val roomId: String,
+        val messageId: String? = null,
+    ) : NotificationNavigationTarget
+
     data object Chat : NotificationNavigationTarget
 }
 
@@ -1247,6 +1258,15 @@ val NotificationItem.navigationTarget: NotificationNavigationTarget?
                 userId = it,
                 messageId = chatMessageId?.takeIf { messageId -> messageId.isNotBlank() },
             )
+        }
+        chatRoomId?.takeIf { it.isNotBlank() }?.let { roomId ->
+            // 邀请通知仍只跳转聊天入口，由用户在界面内决定是否加入
+            if (type != NotificationType.ChatRoomInvitation) {
+                return NotificationNavigationTarget.ChatRoom(
+                    roomId = roomId,
+                    messageId = chatMessageId?.takeIf { messageId -> messageId.isNotBlank() },
+                )
+            }
         }
         if (type == NotificationType.ChatRoomInvitation || !chatRoomId.isNullOrBlank()) {
             return NotificationNavigationTarget.Chat

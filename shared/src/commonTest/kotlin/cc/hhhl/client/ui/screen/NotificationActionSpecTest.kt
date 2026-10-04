@@ -61,6 +61,38 @@ class NotificationActionSpecTest {
             NotificationNavigationTarget.Chat,
             notification(type = NotificationType.ChatRoomInvitation).navigationTarget,
         )
+        assertEquals(
+            NotificationNavigationTarget.Chat,
+            notification(
+                type = NotificationType.ChatRoomInvitation,
+                chatRoomId = "room-1",
+            ).navigationTarget,
+        )
+    }
+
+    @Test
+    fun chatRoomMentionNotificationNavigationTargetsRoomMessage() {
+        val target = notification(
+            type = NotificationType.Mention,
+            chatRoomId = "room-1",
+            chatMessageId = "message-1",
+        ).navigationTarget
+
+        assertIs<NotificationNavigationTarget.ChatRoom>(target)
+        assertEquals("room-1", target.roomId)
+        assertEquals("message-1", target.messageId)
+    }
+
+    @Test
+    fun chatRoomNotificationWithoutMessageStillTargetsRoom() {
+        val target = notification(
+            type = NotificationType.Reply,
+            chatRoomId = "room-1",
+        ).navigationTarget
+
+        assertIs<NotificationNavigationTarget.ChatRoom>(target)
+        assertEquals("room-1", target.roomId)
+        assertNull(target.messageId)
     }
 
     @Test
@@ -96,6 +128,7 @@ class NotificationActionSpecTest {
         notePreviewText: String? = null,
         noteId: String? = null,
         chatUserId: String? = null,
+        chatRoomId: String? = null,
         chatMessageId: String? = null,
     ): NotificationItem {
         return NotificationItem(
@@ -107,6 +140,7 @@ class NotificationActionSpecTest {
             noteId = noteId,
             notePreviewText = notePreviewText,
             chatUserId = chatUserId,
+            chatRoomId = chatRoomId,
             chatMessageId = chatMessageId,
         )
     }

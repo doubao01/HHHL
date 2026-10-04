@@ -1915,9 +1915,6 @@ private fun ProfileRouteContent(
     onChangeAvatar: () -> Unit,
     onSelectPresetAvatar: (String) -> Unit,
     onTakePhoto: (() -> Unit)? = null,
-    pendingAvatarUpload: DriveFileUpload? = null,
-    onConfirmAvatar: () -> Unit = {},
-    onCancelAvatar: () -> Unit = {},
     onLogout: () -> Unit,
     onThemeSelected: (HhhlThemePreset) -> Unit,
     onTimelineDensitySelected: (TimelineDensity) -> Unit,
@@ -1986,9 +1983,6 @@ private fun ProfileRouteContent(
         onChangeAvatar = onChangeAvatar,
         onSelectPresetAvatar = onSelectPresetAvatar,
         onTakePhoto = onTakePhoto,
-        pendingAvatarUpload = pendingAvatarUpload,
-        onConfirmAvatar = onConfirmAvatar,
-        onCancelAvatar = onCancelAvatar,
         onLogout = onLogout,
         onThemeSelected = onThemeSelected,
         onTimelineDensitySelected = onTimelineDensitySelected,
@@ -2719,6 +2713,7 @@ private fun NotificationsRouteContent(
     onRejectFollowRequest: (String) -> Unit,
     onOpenChat: () -> Unit,
     onOpenChatUser: (String, String?) -> Unit,
+    onOpenChatRoom: (String, String?) -> Unit,
     onSendTestNotification: () -> Unit,
     onSendReminderNotification: () -> Unit,
     latestAiResultFor: (Array<out AiTaskKind>) -> AiTask?,
@@ -2764,6 +2759,7 @@ private fun NotificationsRouteContent(
         onRejectFollowRequest = onRejectFollowRequest,
         onOpenChat = onOpenChat,
         onOpenChatUser = onOpenChatUser,
+        onOpenChatRoom = onOpenChatRoom,
         onSendTestNotification = onSendTestNotification,
         onSendReminderNotification = onSendReminderNotification,
         aiEnabled = aiState.hasUsableModel,
@@ -3457,6 +3453,9 @@ private fun MainShell(
             ?: currentAccountId?.substringBefore(':')?.takeIf { host -> host.isNotBlank() && !host.startsWith("legacy-") }
     }
     val clipboardManager = LocalClipboardManager.current
+    val notificationRepository = remember(sessionToken) {
+        NotificationRepository(tokenProvider = { sessionToken })
+    }
     val chatRepository = remember(sessionToken, currentAccountId, accountUser?.id, chatMessageCache) {
         ChatRepository(
             tokenProvider = { sessionToken },
@@ -3531,9 +3530,6 @@ private fun MainShell(
         )
     }
     val noteActionState by noteActionStateHolder.state.collectAsState()
-    val notificationRepository = remember(sessionToken) {
-        NotificationRepository(tokenProvider = { sessionToken })
-    }
     val notificationStateHolder = remember {
         NotificationStateHolder(
             repository = notificationRepository,
@@ -7443,6 +7439,14 @@ private fun MainShell(
             chatStateHolder.openUserConversation(user, jumpMessageId = messageId)
         }
     }
+    val onOpenChatRoomById: (String, String?) -> Unit = { roomId, messageId ->
+        val cleanRoomId = roomId.trim()
+        if (cleanRoomId.isNotEmpty()) {
+            rootRoute = RootRoute.Chat
+            route = AppRoute.Chat
+            chatStateHolder.openRoomById(cleanRoomId, jumpMessageId = messageId)
+        }
+    }
     var clipTargetNote by remember { mutableStateOf<Note?>(null) }
     LaunchedEffect(instanceMetaState.meta?.capabilities?.clipLimit) {
         if (!instanceCapabilities.canUseClips) {
@@ -8016,6 +8020,7 @@ private fun MainShell(
                     onRejectFollowRequest = onRejectFollowRequestFromNotification,
                     onOpenChat = onOpenChatFromNotification,
                     onOpenChatUser = onOpenChatUserById,
+                    onOpenChatRoom = onOpenChatRoomById,
                     onSendTestNotification = notificationStateHolder::sendTestNotification,
                     onSendReminderNotification = notificationStateHolder::createLocalReminderNotification,
                     latestAiResultFor = { kinds -> latestAiResultFor(*kinds) },
@@ -8166,7 +8171,7 @@ private fun MainShell(
                             userProfileStateHolder.showProfileEditError("当前设备不支持选择图片")
                         } else {
                             picker.pickSingleImage(
-                                onPicked = userProfileStateHolder::setPendingAvatar,
+                                onPicked = userProfileStateHolder::uploadAvatar,
                                 onError = userProfileStateHolder::showProfileEditError,
                             )
                         }
@@ -8177,7 +8182,7 @@ private fun MainShell(
                             userProfileStateHolder.showProfileEditError("当前设备不支持拍照")
                         } else {
                             picker.takePhoto(
-                                onPicked = userProfileStateHolder::setPendingAvatar,
+                                onPicked = userProfileStateHolder::uploadAvatar,
                                 onError = userProfileStateHolder::showProfileEditError,
                             )
                         }
@@ -8222,16 +8227,13 @@ private fun MainShell(
                                         fileName = fileName,
                                         contentType = responseContentType,
                                     )
-                                    userProfileStateHolder.setPendingAvatar(upload)
+                                    userProfileStateHolder.uploadAvatar(upload)
                                 }
                             } catch (e: Exception) {
                                 userProfileStateHolder.showProfileEditError("下载头像失败：${e.message ?: "未知错误"}")
                             }
                         }
                     },
-                    pendingAvatarUpload = userProfileStateHolder.state.value.pendingAvatarUpload,
-                    onConfirmAvatar = userProfileStateHolder::confirmPendingAvatar,
-                    onCancelAvatar = userProfileStateHolder::cancelPendingAvatar,
                     onLogout = onAuthInvalid,
                     onThemeSelected = onThemeSelected,
                     onTimelineDensitySelected = onTimelineDensitySelected,
