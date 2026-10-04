@@ -31,6 +31,12 @@ Entries discovered by the Agent during task execution should follow this format:
 
 ## Entries
 
+[提交工作流偏好]
+- Date: 2026-10-04
+- Context: 用户纠正提交方式后提出
+- Instructions:
+  - 提交代码直接在 master 上进行，不要新建功能分支再合并；push 到 origin 即可。
+
 [HHHL 客户端构建环境搭建]
 - Date: 2026-10-03
 - Context: Discovered by Agent while verifying chat module changes
@@ -46,3 +52,9 @@ Entries discovered by the Agent during task execution should follow this format:
   - 构建/测试属于编译类命令，按环境规则必须通过 `background_terminal_create` 执行（设置 `JAVA_HOME`、`ANDROID_HOME`/`ANDROID_SDK_ROOT`；建议 `memory_percent` 60-65，`cpu_percent` 200，`timeout` 20-30 分钟），禁止直接用前台 bash 长时间运行 Gradle。
   - background_terminal 的命令由 `sh` 执行，不支持 bash 特有语法（如 `${PIPESTATUS[0]}` 会报 Bad substitution 导致误判失败）；判断构建结果应把输出重定向到文件后直接取 `$?`，不要经管道取退出码。
   - 本机约 8GB RAM、无 swap。不要跑 `:shared:build`（会并行 `compileDebugKotlinAndroid` + `compileReleaseKotlinAndroid`，峰值超过 4.4GiB 后变慢）。验证用 `./gradlew --no-daemon --offline --max-workers=1 :shared:compileDebugKotlinAndroid :shared:testDebugUnitTest`。
+
+[不要开分支，直接在 master 提交]
+- Date: 2026-10-04
+- Context: 用户提交代码后要求撤销特性分支
+- Instructions:
+  - 本项目提交代码直接在 master 上进行，不要新建特性分支或 MR 分支。
