@@ -77,6 +77,7 @@ import cc.hhhl.client.model.NoteMedia
 import cc.hhhl.client.model.NoteVisibility
 import cc.hhhl.client.model.User
 import cc.hhhl.client.model.commonReactionOptions
+import cc.hhhl.client.presentation.notePreviewText
 import cc.hhhl.client.theme.LocalHhhlColors
 import kotlin.math.abs
 
