@@ -765,6 +765,29 @@ class ChatPresentationTest {
     }
 
     @Test
+    fun chatMessageSearchAndUiFilterRegexSafetyStayInSync() {
+        val patterns = listOf(
+            "target\\s+body",
+            "hello|world",
+            "[",
+            "(a+)+$",
+            "(ab|a)+$",
+            "(word)\\1",
+            "(?=.*token).*",
+            "(?<=prefix)token",
+            "x".repeat(200),
+        )
+
+        patterns.forEach { pattern ->
+            assertEquals(
+                pattern.isSafeChatMessageUiFilterRegex(),
+                pattern.isSafeChatMessageSearchRegex(),
+                "safety decision diverged for pattern: $pattern",
+            )
+        }
+    }
+
+    @Test
     fun loadedChatMessageIdSetIndexesCurrentMessagesForJumpChecks() {
         val messages = listOf(
             chatMessage("m1", authorId = "user-1"),

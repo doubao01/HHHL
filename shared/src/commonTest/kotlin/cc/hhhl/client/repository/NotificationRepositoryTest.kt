@@ -107,6 +107,23 @@ class NotificationRepositoryTest {
     }
 
     @Test
+    fun loadMoreMarksEndReachedWhenPageReturnsOnlyDuplicateNotifications() = runTest {
+        val first = FakeData.notifications[0]
+        val repository = NotificationRepository(
+            tokenProvider = { "token-123" },
+            api = fakeApi(
+                result = NotificationLoadResult.Success(listOf(first.copy(text = "duplicate"))),
+            ),
+        )
+
+        val result = repository.loadMore(listOf(first))
+
+        assertIs<NotificationRepositoryResult.Success>(result)
+        assertEquals(listOf(first), result.notifications)
+        assertTrue(result.endReached)
+    }
+
+    @Test
     fun missingTokenReturnsUnauthorizedWithoutCallingApi() = runTest {
         var calls = 0
         val repository = NotificationRepository(

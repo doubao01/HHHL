@@ -7586,10 +7586,7 @@ internal fun List<ChatMessage>.filterByChatMessageSearchRegex(
 }
 
 internal fun String.isSafeChatMessageSearchRegex(): Boolean {
-    val pattern = trim()
-    if (pattern.isEmpty() || pattern.length > CHAT_MESSAGE_UI_FILTER_MAX_REGEX_LENGTH) return false
-    if (runCatching { Regex(pattern) }.isFailure) return false
-    return !pattern.hasNestedOrAmbiguousRegexQuantifier() && !pattern.hasAdvancedBacktrackingRegexConstruct()
+    return isSafeChatMessageUiFilterRegex()
 }
 
 private fun ChatMessage.matchesChatMessageQuery(query: String): Boolean {

@@ -89,10 +89,14 @@ open class NotificationRepository(
                 includeTypes = filter.includedTypes,
             )
         ) {
-            is NotificationLoadResult.Success -> NotificationRepositoryResult.Success(
-                notifications = mergeNotificationPage(currentNotifications, result.notifications),
-                endReached = result.notifications.isEmpty(),
-            )
+            is NotificationLoadResult.Success -> {
+                val mergedNotifications = mergeNotificationPage(currentNotifications, result.notifications)
+                NotificationRepositoryResult.Success(
+                    notifications = mergedNotifications,
+                    endReached = result.notifications.isEmpty() ||
+                        mergedNotifications.size == currentNotifications.size,
+                )
+            }
             NotificationLoadResult.Unauthorized -> NotificationRepositoryResult.Unauthorized
             is NotificationLoadResult.NetworkError -> {
                 NotificationRepositoryResult.Error("无法连接服务器：${result.message}")

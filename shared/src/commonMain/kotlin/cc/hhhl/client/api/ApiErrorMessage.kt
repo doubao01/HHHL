@@ -3,18 +3,33 @@ package cc.hhhl.client.api
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
+import io.ktor.util.AttributeKey
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
+private val SharkeyErrorBodyKey = AttributeKey<String>("HHHLSharkeyErrorBody")
+
+/**
+ * Reads and caches the response body text so both the authorization check and the error-message
+ * mapper can inspect it without consuming the single-read response body twice.
+ */
+internal suspend fun HttpResponse.sharkeyErrorBodyText(): String {
+    val attributes = call.attributes
+    attributes.getOrNull(SharkeyErrorBodyKey)?.let { return it }
+    val text = runCatching { bodyAsText() }.getOrDefault("")
+    attributes.put(SharkeyErrorBodyKey, text)
+    return text
+}
+
 internal suspend fun HttpResponse.sharkeyApiErrorMessage(): String? {
-    return bodyAsText().toSharkeyApiErrorMessage(status.value)
+    return sharkeyErrorBodyText().toSharkeyApiErrorMessage(status.value)
 }
 
 internal suspend fun HttpResponse.isSharkeyUnauthorized(): Boolean {
     if (status == HttpStatusCode.Unauthorized) return true
     if (status != HttpStatusCode.Forbidden) return false
-    return runCatching { bodyAsText().isSharkeyAuthenticationFailure() }.getOrDefault(false)
+    return runCatching { sharkeyErrorBodyText().isSharkeyAuthenticationFailure() }.getOrDefault(false)
 }
 
 internal fun String.toSharkeyApiErrorMessage(statusCode: Int? = null): String? {

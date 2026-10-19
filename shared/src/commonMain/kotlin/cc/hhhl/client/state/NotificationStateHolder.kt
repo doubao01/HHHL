@@ -21,9 +21,11 @@ data class NotificationUiState(
     val isLoading: Boolean = false,
     val isLoadingMore: Boolean = false,
     val isMarkingAllRead: Boolean = false,
+    val isPerformingAction: Boolean = false,
     val unreadCount: Int = 0,
     val specialCareNotificationCount: Int = 0,
     val specialCareUnreadCount: Int = 0,
+    val totalNotificationCount: Int = 0,
     val endReached: Boolean = false,
     val message: String? = null,
     val errorMessage: String? = null,
@@ -72,6 +74,11 @@ class NotificationStateHolder(
             ),
             specialCareNotificationCount = cachedSpecialCareNotifications.size,
             specialCareUnreadCount = cachedSpecialCareNotifications.countUnread(),
+            totalNotificationCount = distinctNotificationCount(
+                remoteNotifications = cachedRemoteNotifications,
+                chatAttentionNotifications = cachedChatAttentionNotifications,
+                specialCareNotifications = cachedSpecialCareNotifications,
+            ),
             endReached = cachedRemoteNotifications.isNotEmpty(),
         )
     )
@@ -86,7 +93,7 @@ class NotificationStateHolder(
     private var localAllReadCutoffEpochMillis: Long = 0L
 
     fun refresh() {
-        if (state.value.isLoading) return
+        if (state.value.isLoading || state.value.isPerformingAction) return
         if (state.value.selectedFilter == NotificationFilter.SpecialCare) {
             mutableState.update {
                 it.copy(
@@ -96,7 +103,7 @@ class NotificationStateHolder(
                     endReached = true,
                     errorMessage = null,
                     requiresRelogin = false,
-                ).withSpecialCareCounts()
+                ).withDerivedCounts()
             }
             return
         }
@@ -124,7 +131,7 @@ class NotificationStateHolder(
 
     fun refreshQuietly() {
         val current = state.value
-        if (current.isLoading || current.isLoadingMore || current.isMarkingAllRead || isQuietRefreshing) return
+        if (current.isLoading || current.isLoadingMore || current.isMarkingAllRead || current.isPerformingAction || isQuietRefreshing) return
         isQuietRefreshing = true
 
         scope.launch {
@@ -157,13 +164,13 @@ class NotificationStateHolder(
                 message = null,
                 errorMessage = null,
                 requiresRelogin = false,
-            ).withSpecialCareCounts()
+            ).withDerivedCounts()
         }
     }
 
     fun selectFilter(filter: NotificationFilter) {
-        if (state.value.selectedFilter == filter && state.value.notifications.isNotEmpty()) return
-        if (state.value.isLoading) return
+        val current = state.value
+        if (current.selectedFilter == filter && (current.notifications.isNotEmpty() || current.isLoading)) return
 
         if (filter == NotificationFilter.SpecialCare) {
             mutableState.update {
@@ -176,7 +183,7 @@ class NotificationStateHolder(
                     message = null,
                     errorMessage = null,
                     requiresRelogin = false,
-                ).withSpecialCareCounts()
+                ).withDerivedCounts()
             }
             return
         }
@@ -243,14 +250,14 @@ class NotificationStateHolder(
 
     fun markAllAsRead() {
         val current = state.value
-        if (current.isLoading || current.isMarkingAllRead) return
+        if (current.isLoading || current.isMarkingAllRead || current.isPerformingAction) return
         if (current.unreadCount == 0 && current.specialCareUnreadCount == 0) {
             mutableState.update {
                 it.copy(
                     message = "没有未读通知",
                     errorMessage = null,
                     requiresRelogin = false,
-                ).withSpecialCareCounts()
+                ).withDerivedCounts()
             }
             return
         }
@@ -271,7 +278,7 @@ class NotificationStateHolder(
 
     fun flush() {
         val current = state.value
-        if (current.isLoading || current.isMarkingAllRead || current.notifications.isEmpty()) return
+        if (current.isLoading || current.isMarkingAllRead || current.isPerformingAction || !hasClearableNotifications()) return
 
         mutableState.update {
             it.copy(
@@ -299,7 +306,7 @@ class NotificationStateHolder(
                         message = "通知已清空",
                         errorMessage = null,
                         requiresRelogin = false,
-                    ).withSpecialCareCounts()
+                    ).withDerivedCounts()
                 }
                 else -> applyResult(result, loadingMore = false)
             }
@@ -308,11 +315,11 @@ class NotificationStateHolder(
 
     fun sendTestNotification() {
         val current = state.value
-        if (current.isLoading || current.isMarkingAllRead) return
+        if (current.isLoading || current.isMarkingAllRead || current.isPerformingAction) return
 
         mutableState.update {
             it.copy(
-                isMarkingAllRead = true,
+                isPerformingAction = true,
                 message = null,
                 errorMessage = null,
                 requiresRelogin = false,
@@ -325,11 +332,11 @@ class NotificationStateHolder(
                     it.copy(
                         isLoading = false,
                         isLoadingMore = false,
-                        isMarkingAllRead = false,
+                        isPerformingAction = false,
                         message = "测试通知已发送",
                         errorMessage = null,
                         requiresRelogin = false,
-                    ).withSpecialCareCounts()
+                    ).withDerivedCounts()
                 }
                 else -> applyResult(result, loadingMore = false)
             }
@@ -342,11 +349,11 @@ class NotificationStateHolder(
         icon: String? = null,
     ) {
         val current = state.value
-        if (current.isLoading || current.isMarkingAllRead) return
+        if (current.isLoading || current.isMarkingAllRead || current.isPerformingAction) return
 
         mutableState.update {
             it.copy(
-                isMarkingAllRead = true,
+                isPerformingAction = true,
                 message = null,
                 errorMessage = null,
                 requiresRelogin = false,
@@ -359,11 +366,11 @@ class NotificationStateHolder(
                     it.copy(
                         isLoading = false,
                         isLoadingMore = false,
-                        isMarkingAllRead = false,
+                        isPerformingAction = false,
                         message = "提醒通知已发送",
                         errorMessage = null,
                         requiresRelogin = false,
-                    ).withSpecialCareCounts()
+                    ).withDerivedCounts()
                 }
                 else -> applyResult(result, loadingMore = false)
             }
@@ -395,7 +402,7 @@ class NotificationStateHolder(
                 message = null,
                 errorMessage = null,
                 requiresRelogin = false,
-            ).withSpecialCareCounts()
+            ).withDerivedCounts()
         }
     }
 
@@ -414,13 +421,12 @@ class NotificationStateHolder(
             persistNotificationCache()
 
             val visibleNotifications = current.notifications.markNotificationRead(cleanId)
-            val unreadDelta = if (visibleNotification != null && !visibleNotification.isRead) 1 else 0
             current.copy(
                 notifications = visibleNotifications,
-                unreadCount = (current.unreadCount - unreadDelta).coerceAtLeast(0),
+                unreadCount = totalUnreadCount(),
                 message = null,
                 requiresRelogin = false,
-            ).withSpecialCareCounts()
+            ).withDerivedCounts()
         }
     }
 
@@ -445,7 +451,7 @@ class NotificationStateHolder(
                 },
                 unreadCount = totalUnreadCount,
                 requiresRelogin = false,
-            ).withSpecialCareCounts()
+            ).withDerivedCounts()
         }
     }
 
@@ -460,20 +466,18 @@ class NotificationStateHolder(
         persistNotificationCache()
 
         mutableState.update {
-            val visibleNotifications = if (it.selectedFilter == NotificationFilter.SpecialCare) {
-                result.notifications
-            } else if (it.selectedFilter == NotificationFilter.All) {
-                remoteNotifications
+            val visibleNotifications = when (it.selectedFilter) {
+                NotificationFilter.SpecialCare -> result.notifications
+                NotificationFilter.All -> remoteNotifications
                     .withLocalChatAttentionNotifications(chatAttentionNotifications)
                     .withLocalSpecialCareNotifications(result.notifications)
-            } else {
-                it.notifications
+                else -> notificationsForFilter(it.selectedFilter)
             }
             it.copy(
                 notifications = visibleNotifications,
                 unreadCount = totalUnreadCount(),
                 requiresRelogin = false,
-            ).withSpecialCareCounts()
+            ).withDerivedCounts()
         }
     }
 
@@ -492,20 +496,14 @@ class NotificationStateHolder(
                 NotificationFilter.All -> remoteNotifications
                     .withLocalChatAttentionNotifications(result.notifications)
                     .withLocalSpecialCareNotifications(specialCareNotifications)
-                NotificationFilter.Mentions -> (
-                    remoteNotifications.filter { item -> item.type in NotificationFilter.Mentions.includedTypes } +
-                        result.notifications.filter { item -> item.type in NotificationFilter.Mentions.includedTypes }
-                    )
-                    .distinctBy { item -> item.id }
-                    .sortedByDescending { item -> item.createdAtEpochMillis }
                 NotificationFilter.SpecialCare -> it.notifications
-                else -> it.notifications
+                else -> notificationsForFilter(it.selectedFilter)
             }
             it.copy(
                 notifications = visibleNotifications,
                 unreadCount = totalUnreadCount(),
                 requiresRelogin = false,
-            ).withSpecialCareCounts()
+            ).withDerivedCounts()
         }
     }
 
@@ -531,9 +529,10 @@ class NotificationStateHolder(
                     isLoading = false,
                     isLoadingMore = false,
                     isMarkingAllRead = false,
+                    isPerformingAction = false,
                     errorMessage = null,
                     requiresRelogin = false,
-                ).withSpecialCareCounts()
+                ).withDerivedCounts()
             }
             NotificationRepositoryResult.AllRead -> mutableState.update {
                 recordLocalAllReadCutoff()
@@ -556,12 +555,13 @@ class NotificationStateHolder(
                     isLoading = false,
                     isLoadingMore = false,
                     isMarkingAllRead = false,
+                    isPerformingAction = false,
                     unreadCount = 0,
                     endReached = it.endReached,
                     message = "通知已全部标记为已读",
                     errorMessage = null,
                     requiresRelogin = false,
-                ).withSpecialCareCounts()
+                ).withDerivedCounts()
             }
             is NotificationRepositoryResult.Success -> mutableState.update {
                 val loadedNotifications = result.notifications.applyLocalReadState()
@@ -584,32 +584,41 @@ class NotificationStateHolder(
                     isLoading = false,
                     isLoadingMore = false,
                     isMarkingAllRead = false,
+                    isPerformingAction = false,
                     unreadCount = totalUnreadCount,
                     endReached = result.endReached,
                     message = null,
                     errorMessage = null,
                     requiresRelogin = false,
-                ).withSpecialCareCounts()
+                ).withDerivedCounts()
             }
             NotificationRepositoryResult.Unauthorized -> mutableState.update {
                 it.copy(
                     isLoading = false,
                     isLoadingMore = false,
                     isMarkingAllRead = false,
+                    isPerformingAction = false,
                     errorMessage = "登录已失效，请重新登录",
                     requiresRelogin = true,
-                ).withSpecialCareCounts()
+                ).withDerivedCounts()
             }
             is NotificationRepositoryResult.Error -> mutableState.update {
                 it.copy(
                     isLoading = if (loadingMore) it.isLoading else false,
                     isLoadingMore = false,
                     isMarkingAllRead = false,
+                    isPerformingAction = false,
                     errorMessage = result.message,
                     requiresRelogin = false,
-                ).withSpecialCareCounts()
+                ).withDerivedCounts()
             }
         }
+    }
+
+    private fun hasClearableNotifications(): Boolean {
+        return remoteNotifications.isNotEmpty() ||
+            chatAttentionNotifications.isNotEmpty() ||
+            specialCareNotifications.isNotEmpty()
     }
 
     private fun nextNotificationRequestId(): Int {
@@ -643,13 +652,13 @@ class NotificationStateHolder(
                     message = null,
                     errorMessage = null,
                     requiresRelogin = false,
-                ).withSpecialCareCounts()
+                ).withDerivedCounts()
             }
             NotificationRepositoryResult.Unauthorized -> mutableState.update {
                 it.copy(
                     errorMessage = "登录已失效，请重新登录",
                     requiresRelogin = true,
-                ).withSpecialCareCounts()
+                ).withDerivedCounts()
             }
             NotificationRepositoryResult.AllRead,
             NotificationRepositoryResult.ActionSuccess,
@@ -658,11 +667,32 @@ class NotificationStateHolder(
         }
     }
 
-    private fun NotificationUiState.withSpecialCareCounts(): NotificationUiState {
+    private fun NotificationUiState.withDerivedCounts(): NotificationUiState {
         return copy(
             specialCareNotificationCount = specialCareNotifications.size,
             specialCareUnreadCount = specialCareNotifications.countUnread(),
+            totalNotificationCount = distinctNotificationCount(),
         )
+    }
+
+    private fun distinctNotificationCount(): Int {
+        return distinctNotificationCount(
+            remoteNotifications = remoteNotifications,
+            chatAttentionNotifications = chatAttentionNotifications,
+            specialCareNotifications = specialCareNotifications,
+        )
+    }
+
+    private fun distinctNotificationCount(
+        remoteNotifications: List<NotificationItem>,
+        chatAttentionNotifications: List<NotificationItem>,
+        specialCareNotifications: List<NotificationItem>,
+    ): Int {
+        val keys = LinkedHashSet<String>()
+        sequenceOf(remoteNotifications, chatAttentionNotifications, specialCareNotifications)
+            .flatMap { notifications -> notifications.asSequence() }
+            .forEach { notification -> keys.add(notification.notificationDedupeKey()) }
+        return keys.size
     }
 
     private fun syncRemoteSpecialCareNotifications(
@@ -697,7 +727,7 @@ class NotificationStateHolder(
                 },
                 unreadCount = totalUnreadCount(),
                 requiresRelogin = false,
-            ).withSpecialCareCounts()
+            ).withDerivedCounts()
         }
     }
 
@@ -780,7 +810,8 @@ class NotificationStateHolder(
         val retainedIds = readNotificationIds
             .asSequence()
             .filter { it.isNotBlank() }
-            .take(MAX_LOCAL_READ_NOTIFICATION_IDS)
+            .toList()
+            .takeLast(MAX_LOCAL_READ_NOTIFICATION_IDS)
             .toSet()
         readNotificationIds = retainedIds
         runCatching { readStore.saveReadNotificationIds(cleanAccountId, retainedIds) }

@@ -275,6 +275,42 @@ class SharkeyNotificationApiTest {
         assertIs<NotificationActionResult.Success>(api.sendTestNotification("token-123"))
     }
 
+    @Test
+    fun mapsForbiddenNotificationLoadToPermissionErrorInsteadOfRelogin() = runTest {
+        val api = SharkeyNotificationApi(
+            client = testClient {
+                respond(
+                    content = """{"error":{"message":"Your app does not have the necessary permissions to use this endpoint."}}""",
+                    status = HttpStatusCode.Forbidden,
+                    headers = jsonHeaders,
+                )
+            },
+        )
+
+        val result = api.loadNotifications("token-123", 20)
+
+        val error = assertIs<NotificationLoadResult.ServerError>(result)
+        assertEquals(403, error.statusCode)
+        assertEquals("当前登录缺少此功能权限，请检查应用授权或账号权限", error.message)
+    }
+
+    @Test
+    fun mapsForbiddenNotificationActionToPermissionError() = runTest {
+        val api = SharkeyNotificationApi(
+            client = testClient {
+                respond(
+                    content = """{"message":"Forbidden"}""",
+                    status = HttpStatusCode.Forbidden,
+                    headers = jsonHeaders,
+                )
+            },
+        )
+
+        val error = assertIs<NotificationActionResult.ServerError>(api.markAllAsRead("token-123"))
+        assertEquals(403, error.statusCode)
+        assertEquals("当前账号没有执行此操作的权限", error.message)
+    }
+
     private fun MockRequestHandleScope.respondRichNotificationArray(): HttpResponseData {
         return respond(
             content = """

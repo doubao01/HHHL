@@ -170,7 +170,8 @@ fun NotificationsScreen(
         NotificationInboxSection.Notifications -> notificationSummaryActions(
             isLoading = state?.isLoading == true,
             isMarkingAllRead = state?.isMarkingAllRead == true,
-            notificationCount = notifications.size,
+            isPerformingAction = state?.isPerformingAction == true,
+            notificationCount = (state?.totalNotificationCount ?: notifications.size),
             onMarkAllAsRead = onMarkAllAsRead,
             onFlush = onFlush,
             onSendTestNotification = onSendTestNotification,
@@ -841,6 +842,7 @@ internal fun notificationMarkAllReadEnabled(
 fun notificationSummaryActions(
     isLoading: Boolean = false,
     isMarkingAllRead: Boolean,
+    isPerformingAction: Boolean = false,
     notificationCount: Int = 0,
     onMarkAllAsRead: () -> Unit = {},
     onFlush: () -> Unit = {},
@@ -857,18 +859,18 @@ fun notificationSummaryActions(
         enabled = notificationMarkAllReadEnabled(
             isLoading = isLoading,
             isMarkingAllRead = isMarkingAllRead,
-        ),
+        ) && !isPerformingAction,
         onClick = onMarkAllAsRead,
     ),
     HhhlOverflowMenuAction(
         label = "清空",
-        enabled = !isMarkingAllRead && notificationCount > 0,
+        enabled = !isMarkingAllRead && !isPerformingAction && notificationCount > 0,
         destructive = true,
         onClick = onFlush,
     ),
     HhhlOverflowMenuAction(
         label = if (isAiProcessing) "AI 处理中" else "AI",
-        enabled = aiEnabled && !isAiProcessing && !isMarkingAllRead,
+        enabled = aiEnabled && !isAiProcessing && !isMarkingAllRead && !isPerformingAction,
         icon = Icons.Filled.AutoAwesome,
         onClick = {},
         children = listOf(
@@ -879,12 +881,12 @@ fun notificationSummaryActions(
     ),
     HhhlOverflowMenuAction(
         label = "测试通知",
-        enabled = !isMarkingAllRead,
+        enabled = !isPerformingAction && !isMarkingAllRead,
         onClick = onSendTestNotification,
     ),
     HhhlOverflowMenuAction(
         label = "提醒自己",
-        enabled = !isMarkingAllRead,
+        enabled = !isPerformingAction && !isMarkingAllRead,
         onClick = onSendReminderNotification,
     ),
 )

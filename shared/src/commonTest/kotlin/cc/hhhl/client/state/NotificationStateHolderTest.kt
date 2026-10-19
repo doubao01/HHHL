@@ -291,6 +291,126 @@ class NotificationStateHolderTest {
     }
 
     @Test
+    fun markNotificationReadRecomputesUnreadCountWhenNotificationIsHiddenByFilter() = runTest {
+        val reaction = FakeData.notifications[0].copy(
+            id = "hidden-reaction",
+            type = NotificationType.Reaction,
+        )
+        val mention = FakeData.notifications[1].copy(
+            id = "visible-mention",
+            type = NotificationType.Mention,
+        )
+        val holder = NotificationStateHolder(
+            repository = fakeRepository(
+                refreshResult = NotificationRepositoryResult.Success(listOf(reaction, mention)),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refresh()
+        advanceUntilIdle()
+        holder.selectFilter(NotificationFilter.Mentions)
+        advanceUntilIdle()
+
+        assertEquals(listOf("visible-mention"), holder.state.value.notifications.map { it.id })
+        assertEquals(2, holder.state.value.unreadCount)
+
+        holder.markNotificationRead(reaction.id)
+
+        assertEquals(1, holder.state.value.unreadCount)
+        assertEquals(listOf("visible-mention"), holder.state.value.notifications.map { it.id })
+    }
+
+    @Test
+    fun persistReadNotificationIdsRetainsNewestIds() = runTest {
+        var saved: Set<String>? = null
+        val readStore = object : NotificationReadStore {
+            override fun loadReadNotificationIds(accountId: String): Set<String> =
+                (1..1000).map { "seed-$it" }.toSet()
+
+            override fun saveReadNotificationIds(accountId: String, notificationIds: Set<String>) {
+                saved = notificationIds
+            }
+
+            override fun clearAccount(accountId: String) = Unit
+        }
+        val fresh = FakeData.notifications[0].copy(id = "fresh-notification")
+        val holder = NotificationStateHolder(
+            repository = fakeRepository(
+                refreshResult = NotificationRepositoryResult.Success(listOf(fresh)),
+            ),
+            readStore = readStore,
+            accountId = "account-1",
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refresh()
+        advanceUntilIdle()
+        holder.markNotificationRead(fresh.id)
+
+        val persisted = checkNotNull(saved)
+        assertEquals(1000, persisted.size)
+        assertTrue(fresh.id in persisted)
+        assertFalse("seed-1" in persisted)
+    }
+
+    @Test
+    fun addChatAttentionNotificationRefreshesActiveTypedFilter() = runTest {
+        val reaction = FakeData.notifications[0].copy(
+            id = "remote-reaction",
+            type = NotificationType.Reaction,
+        )
+        val holder = NotificationStateHolder(
+            repository = fakeRepository(
+                refreshResult = NotificationRepositoryResult.Success(listOf(reaction)),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refresh()
+        advanceUntilIdle()
+        holder.selectFilter(NotificationFilter.Reactions)
+        advanceUntilIdle()
+        assertEquals(listOf("remote-reaction"), holder.state.value.notifications.map { it.id })
+
+        holder.addChatAttentionNotification(
+            FakeData.notifications[1].copy(id = "chat-reaction", type = NotificationType.Reaction),
+        )
+
+        assertEquals(
+            setOf("remote-reaction", "chat-reaction"),
+            holder.state.value.notifications.map { it.id }.toSet(),
+        )
+    }
+
+    @Test
+    fun flushClearsNotificationsEvenWhenVisibleFilterIsEmpty() = runTest {
+        val reaction = FakeData.notifications[0].copy(
+            id = "remote-reaction",
+            type = NotificationType.Reaction,
+        )
+        val holder = NotificationStateHolder(
+            repository = fakeRepository(
+                refreshResult = NotificationRepositoryResult.Success(listOf(reaction)),
+            ),
+            scope = TestScope(testScheduler),
+        )
+
+        holder.refresh()
+        advanceUntilIdle()
+        holder.selectFilter(NotificationFilter.Mentions)
+        advanceUntilIdle()
+        assertEquals(emptyList(), holder.state.value.notifications)
+
+        holder.flush()
+        advanceUntilIdle()
+
+        assertEquals(emptyList(), holder.state.value.notifications)
+        assertEquals(0, holder.state.value.totalNotificationCount)
+        assertEquals("通知已清空", holder.state.value.message)
+    }
+
+    @Test
     fun sendTestNotificationStoresSuccessMessage() = runTest {
         val holder = NotificationStateHolder(
             repository = fakeRepository(
@@ -300,10 +420,11 @@ class NotificationStateHolderTest {
         )
 
         holder.sendTestNotification()
-        assertTrue(holder.state.value.isMarkingAllRead)
+        assertTrue(holder.state.value.isPerformingAction)
+        assertFalse(holder.state.value.isMarkingAllRead)
         advanceUntilIdle()
 
-        assertFalse(holder.state.value.isMarkingAllRead)
+        assertFalse(holder.state.value.isPerformingAction)
         assertEquals("测试通知已发送", holder.state.value.message)
     }
 
@@ -317,10 +438,11 @@ class NotificationStateHolderTest {
         )
 
         holder.createLocalReminderNotification()
-        assertTrue(holder.state.value.isMarkingAllRead)
+        assertTrue(holder.state.value.isPerformingAction)
+        assertFalse(holder.state.value.isMarkingAllRead)
         advanceUntilIdle()
 
-        assertFalse(holder.state.value.isMarkingAllRead)
+        assertFalse(holder.state.value.isPerformingAction)
         assertEquals("提醒通知已发送", holder.state.value.message)
     }
 
