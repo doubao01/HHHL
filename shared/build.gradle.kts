@@ -59,6 +59,10 @@ kotlin {
     }
 }
 
+tasks.withType<Test>().configureEach {
+    environment("TZ", "Asia/Shanghai")
+}
+
 android {
     namespace = "cc.hhhl.client.shared"
     compileSdk = 35

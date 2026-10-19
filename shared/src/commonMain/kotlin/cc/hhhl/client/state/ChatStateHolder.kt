@@ -32,8 +32,6 @@ import cc.hhhl.client.repository.DiscoverRepository
 import cc.hhhl.client.repository.DiscoverRepositoryResult
 import cc.hhhl.client.repository.DriveFileRepository
 import cc.hhhl.client.repository.DriveFileRepositoryResult
-import cc.hhhl.client.repository.NotificationRepository
-import cc.hhhl.client.repository.NotificationRepositoryResult
 import cc.hhhl.client.repository.requiresRealtimeAttentionResolution
 import cc.hhhl.client.repository.resolveRealtimeMessage
 import cc.hhhl.client.repository.UserRelationshipRepository
@@ -190,7 +188,6 @@ class ChatStateHolder(
     private val streamingRepository: ChatStreamingRepository? = null,
     private val relationshipRepository: UserRelationshipRepository? = null,
     private val discoverRepository: DiscoverRepository? = null,
-    private val notificationRepository: NotificationRepository? = null,
     private val scope: CoroutineScope,
     private val accountIdProvider: () -> String? = { null },
     private val unreadStore: ChatUnreadStore = NoopChatUnreadStore,

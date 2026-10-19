@@ -3474,7 +3474,6 @@ private fun MainShell(
             streamingRepository = chatStreamingRepository,
             relationshipRepository = UserRelationshipRepository(tokenProvider = { sessionToken }),
             discoverRepository = DiscoverRepository(tokenProvider = { sessionToken }),
-            notificationRepository = notificationRepository,
             accountIdProvider = { currentAccountId },
             unreadStore = chatUnreadStore,
             currentUserProvider = { accountUser?.toDomainUser(host = currentAccountHost) },

@@ -651,37 +651,6 @@ private fun ChatRoomSummaryRow(
 }
 
 @Composable
-private fun ChatSearchPanel(
-    query: String,
-    onQueryChanged: (String) -> Unit,
-) {
-    val colors = LocalHhhlColors.current
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(colors.pageBackground)
-            .padding(horizontal = 14.dp, vertical = 8.dp),
-    ) {
-        HhhlTextInput(
-            value = query,
-            onValueChange = onQueryChanged,
-            placeholder = "搜索",
-            singleLine = true,
-            minHeight = 40.dp,
-            verticalPadding = 8.dp,
-            leading = {
-                Icon(
-                    imageVector = Icons.Filled.Search,
-                    contentDescription = null,
-                    tint = colors.textMuted,
-                    modifier = Modifier.size(18.dp),
-                )
-            },
-        )
-    }
-}
-
-@Composable
 private fun ChatRoomExtrasPanel(
     state: ChatUiState,
     onJoinRoomInvitation: (ChatRoomInvitation) -> Unit,
@@ -751,43 +720,6 @@ private fun ChatExtraSectionTitle(
 }
 
 @Composable
-private fun ChatRoomGroupHeader(
-    title: String,
-    count: Int,
-) {
-    val colors = LocalHhhlColors.current
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            imageVector = Icons.Filled.Folder,
-            contentDescription = null,
-            tint = colors.textMuted,
-            modifier = Modifier.size(15.dp),
-        )
-        Text(
-            text = title,
-            color = colors.textSecondary,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        Text(
-            text = count.toString(),
-            color = colors.textMuted,
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.SemiBold,
-        )
-    }
-}
-
-@Composable
 private fun ChatRoomInvitationRow(
     invitation: ChatRoomInvitation,
     isManaging: Boolean,
@@ -832,46 +764,6 @@ private fun ChatRoomInvitationRow(
             label = "忽略",
             enabled = !isManaging,
             onClick = onIgnore,
-        )
-    }
-}
-
-@Composable
-private fun ChatOverviewPill(
-    label: String,
-    icon: ImageVector,
-    modifier: Modifier = Modifier,
-    emphasized: Boolean = false,
-) {
-    val colors = LocalHhhlColors.current
-    val containerColor = hhhlNeutralControlContainerColor(selected = emphasized)
-    val borderColor = hhhlNeutralControlBorderColor(selected = emphasized)
-    val contentColor = if (emphasized) {
-        hhhlReadableOnControlColor(containerColor, colors.accent)
-    } else {
-        colors.textMuted
-    }
-    Row(
-        modifier = modifier
-            .clip(RoundedCornerShape(999.dp))
-            .background(containerColor)
-            .border(1.dp, borderColor, RoundedCornerShape(999.dp))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = contentColor,
-            modifier = Modifier.size(16.dp),
-        )
-        Text(
-            text = label,
-            color = contentColor,
-            style = MaterialTheme.typography.labelMedium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
         )
     }
 }
@@ -3242,103 +3134,6 @@ fun chatDetailSummaryActions(
             onClick = onAddMedia,
         ),
     )
-}
-
-@Composable
-private fun ChatDetailModeBar(
-    showingMembers: Boolean,
-    messageCount: Int,
-    memberCount: Int,
-    onShowMessages: () -> Unit,
-    onShowMembers: () -> Unit,
-) {
-    val colors = LocalHhhlColors.current
-    val shape = RoundedCornerShape(18.dp)
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 5.dp)
-            .shadow(
-                elevation = 2.dp,
-                shape = shape,
-                clip = false,
-                ambientColor = colors.shadow,
-                spotColor = colors.shadow,
-            )
-            .clip(shape)
-            .background(colors.surfaceElevated.copy(alpha = 0.98f))
-            .border(
-                width = 1.dp,
-                color = colors.border.copy(alpha = 0.52f),
-                shape = shape,
-            )
-            .padding(2.dp),
-        horizontalArrangement = Arrangement.spacedBy(3.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        ChatDetailModeItem(
-            text = chatDetailModeLabel("消息", messageCount),
-            selected = !showingMembers,
-            onClick = onShowMessages,
-            modifier = Modifier.weight(1f),
-        )
-        ChatDetailModeItem(
-            text = chatDetailModeLabel("成员", memberCount),
-            selected = showingMembers,
-            onClick = onShowMembers,
-            modifier = Modifier.weight(1f),
-        )
-    }
-}
-
-@Composable
-private fun ChatDetailModeItem(
-    text: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val colors = LocalHhhlColors.current
-    val interactionSource = rememberChatPresslessInteractionSource()
-    val shape = RoundedCornerShape(14.dp)
-    Box(
-        modifier = modifier
-            .height(28.dp)
-            .clip(shape)
-            .background(
-                if (selected) {
-                    colors.buttonSelectedBackground
-                } else {
-                    Color.Transparent
-                },
-            )
-            .border(
-                width = 1.dp,
-                color = if (selected) {
-                    colors.focusRing.copy(alpha = 0.24f)
-                } else {
-                    Color.Transparent
-                },
-                shape = shape,
-            )
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = onClick,
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = text,
-            color = if (selected) {
-                colors.accent
-            } else {
-                colors.textMuted
-            },
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-        )
-    }
 }
 
 fun chatDetailModeLabel(label: String, count: Int): String {
@@ -5801,55 +5596,6 @@ private fun ChatMessageReactionMenu(
                 compact = true,
             )
         }
-    }
-}
-
-@Composable
-private fun ChatMessageReactionMenuButton(
-    reaction: String,
-    selected: Boolean,
-    enabled: Boolean,
-    isOutgoing: Boolean,
-    onClick: () -> Unit,
-) {
-    val shape = RoundedCornerShape(999.dp)
-    val colors = LocalHhhlColors.current
-    val isDarkSurface = colors.pageBackground.luminance() < 0.18f
-    Box(
-        modifier = Modifier
-            .size(40.dp)
-            .shadow(
-                elevation = if (selected) 2.dp else 1.dp,
-                shape = shape,
-                clip = false,
-                ambientColor = colors.shadow,
-                spotColor = colors.shadow,
-            )
-            .clip(shape)
-            .background(
-                when {
-                    !enabled -> colors.inputBackground.copy(alpha = 0.56f)
-                    selected && isOutgoing && isDarkSurface -> colors.chatOutgoingBubble.copy(alpha = 0.14f)
-                    selected && isOutgoing -> colors.chatOutgoingText.copy(alpha = 0.18f)
-                    selected -> colors.noteReactionBackground.copy(alpha = 0.92f)
-                    isDarkSurface -> colors.surfaceElevated.copy(alpha = 0.82f)
-                    else -> colors.surface.copy(alpha = 0.96f)
-                },
-            )
-            .border(
-                width = 1.dp,
-                color = when {
-                    selected && isOutgoing && isDarkSurface -> colors.focusRing.copy(alpha = 0.54f)
-                    selected && isOutgoing -> colors.chatOutgoingText.copy(alpha = 0.28f)
-                    selected -> colors.focusRing.copy(alpha = 0.54f)
-                    else -> colors.border.copy(alpha = 0.34f)
-                },
-                shape = shape,
-            )
-            .clickable(enabled = enabled, onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        CustomEmojiReactionLabel(reaction = reaction)
     }
 }
 
